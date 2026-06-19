@@ -4,6 +4,7 @@ import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
 import { Dashboard } from './pages/Dashboard'
+import { LoginPage } from './pages/LoginPage'
 import { PIList } from './pages/PIList'
 import { ProductMaster } from './pages/ProductMaster'
 import { RMarketProductRateMaster } from './pages/RMarketProductRateMaster'
@@ -13,6 +14,7 @@ import type { Company, PIFormState, SavedPI, ScreenId } from './types'
 
 const COMPANY_API_URL = apiUrl('/api/master-companies')
 const PI_RMKT_API_URL = apiUrl('/api/master-pi-rmkt')
+const LOGIN_SESSION_KEY = 'autopal-login-user'
 
 type APIRecord = Record<string, unknown>
 
@@ -102,7 +104,16 @@ const getPIPrefix = (companyId: string, companies: Company[]) => {
   return company.piPrefix || ''
 }
 
+const getStoredLoginUser = () => {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+
+  return window.sessionStorage.getItem(LOGIN_SESSION_KEY) ?? ''
+}
+
 function App() {
+  const [loggedInUser, setLoggedInUser] = useState(getStoredLoginUser)
   const [activeScreen, setActiveScreen] = useState<ScreenId>('create-pi')
   const [companies, setCompanies] = useState<Company[]>([])
   const [piForm, setPiForm] = useState<PIFormState>(initialPIForm)
@@ -128,6 +139,22 @@ function App() {
       setSavedPIs([])
     }
   }, [companies])
+
+  useEffect(() => {
+    const syncLoginSession = () => {
+      setLoggedInUser(getStoredLoginUser())
+    }
+
+    window.addEventListener('pageshow', syncLoginSession)
+    window.addEventListener('popstate', syncLoginSession)
+    window.addEventListener('focus', syncLoginSession)
+
+    return () => {
+      window.removeEventListener('pageshow', syncLoginSession)
+      window.removeEventListener('popstate', syncLoginSession)
+      window.removeEventListener('focus', syncLoginSession)
+    }
+  }, [])
 
   useEffect(() => {
     const loadCompanies = async () => {
@@ -262,8 +289,32 @@ function App() {
     }
   }
 
+  const handleLogin = (userName: string) => {
+    setLoggedInUser(userName)
+    window.sessionStorage.setItem(LOGIN_SESSION_KEY, userName)
+    window.history.replaceState(null, '', window.location.href)
+  }
+
+  const handleLogout = () => {
+    window.sessionStorage.removeItem(LOGIN_SESSION_KEY)
+    setLoggedInUser('')
+    setActiveScreen('create-pi')
+    setPiForm(initialPIForm)
+    setEditingPIId(null)
+    window.history.replaceState(null, '', window.location.href)
+  }
+
+  if (!loggedInUser) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
   return (
-    <AppShell activeScreen={activeScreen} onNavigate={navigate}>
+    <AppShell
+      activeScreen={activeScreen}
+      onLogout={handleLogout}
+      onNavigate={navigate}
+      userName={loggedInUser}
+    >
       {activeScreen === 'dashboard' && (
         <Dashboard onNavigate={navigate} savedPIs={savedPIs} />
       )}

@@ -159,6 +159,48 @@ table {
   color: white;
 }
 
+.sidebar-user {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.sidebar-user span,
+.sidebar-user strong {
+  display: block;
+}
+
+.sidebar-user span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+}
+
+.sidebar-user strong {
+  color: white;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.logout-button {
+  background: var(--autopal-saffron);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #4b2300;
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 9px 12px;
+}
+
+.logout-button:hover {
+  background: #ffb32f;
+}
+
 .sidebar-footer {
   align-items: center;
   border-top: 1px solid rgba(255, 255, 255, 0.2);
@@ -193,6 +235,78 @@ table {
   overflow-x: hidden;
   min-width: 0;
   padding: 28px;
+}
+
+.login-page {
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgba(181, 18, 27, 0.12), transparent 42%),
+    linear-gradient(315deg, rgba(245, 158, 11, 0.18), transparent 38%),
+    var(--surface-soft);
+  display: flex;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  margin: 0 auto;
+  max-width: 460px;
+  padding: 28px;
+  width: 100%;
+}
+
+.login-brand {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  margin-bottom: 26px;
+}
+
+.login-logo {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 76px;
+  object-fit: contain;
+  padding: 6px;
+  width: 96px;
+}
+
+.login-brand h1 {
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1.15;
+  margin: 4px 0 0;
+}
+
+.login-form {
+  display: grid;
+  gap: 16px;
+}
+
+.login-message {
+  background: var(--autopal-red-soft);
+  border: 1px solid rgba(181, 18, 27, 0.24);
+  border-radius: 8px;
+  color: var(--autopal-red-dark);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 12px 14px;
+}
+
+.login-message.success {
+  background: #ecfdf3;
+  border-color: rgba(22, 101, 52, 0.2);
+  color: #166534;
+}
+
+.login-switch-row {
+  display: flex;
+  justify-content: center;
 }
 
 .page {

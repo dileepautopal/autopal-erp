@@ -11,6 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT ?? 5000)
 const DIST_PATH = path.resolve(__dirname, '../dist')
 const INDEX_HTML_PATH = path.join(DIST_PATH, 'index.html')
+const USER_TABLE_NAME = 'master_user'
 const COMPANY_TABLE_NAME = 'master_company'
 const PRODUCT_TABLE_NAME = 'master_products'
 const CUSTOMER_TABLE_NAME = 'master_customer'
@@ -1842,6 +1843,106 @@ app.get('/api/health', async (_request, response, next) => {
       database: 'connected',
       service: 'autopal-master-api',
       status: 'ok',
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/login', async (request, response, next) => {
+  try {
+    const userName = String(
+      request.body.userName ?? request.body.user_name ?? '',
+    ).trim()
+    const pw = String(request.body.pw ?? '')
+
+    if (!userName || !pw) {
+      response.status(401).json({
+        authorized: false,
+        message: 'You are not authorised person.',
+      })
+      return
+    }
+
+    const result = await pool.query(
+      `
+        SELECT user_name
+        FROM ${USER_TABLE_NAME}
+        WHERE LOWER(user_name) = LOWER($1)
+          AND pw = $2
+        LIMIT 1
+      `,
+      [userName, pw],
+    )
+
+    if (result.rowCount === 0) {
+      response.status(401).json({
+        authorized: false,
+        message: 'You are not authorised person.',
+      })
+      return
+    }
+
+    response.json({
+      authorized: true,
+      message: 'Login successful.',
+      userName: result.rows[0].user_name,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/change-password', async (request, response, next) => {
+  try {
+    const userName = String(
+      request.body.userName ?? request.body.user_name ?? '',
+    ).trim()
+    const oldPw = String(
+      request.body.oldPw ?? request.body.old_pw ?? request.body.currentPw ?? '',
+    )
+    const newPw = String(request.body.newPw ?? request.body.new_pw ?? '')
+
+    if (!userName || !oldPw || !newPw) {
+      response.status(400).json({
+        changed: false,
+        message: 'User name, current password, and new password are required.',
+      })
+      return
+    }
+
+    const existingUser = await pool.query(
+      `
+        SELECT user_name
+        FROM ${USER_TABLE_NAME}
+        WHERE LOWER(user_name) = LOWER($1)
+          AND pw = $2
+        LIMIT 1
+      `,
+      [userName, oldPw],
+    )
+
+    if (existingUser.rowCount === 0) {
+      response.status(401).json({
+        changed: false,
+        message: 'You are not authorised person.',
+      })
+      return
+    }
+
+    await pool.query(
+      `
+        UPDATE ${USER_TABLE_NAME}
+        SET pw = $2
+        WHERE user_name = $1
+      `,
+      [existingUser.rows[0].user_name, newPw],
+    )
+
+    response.json({
+      changed: true,
+      message: 'Password changed successfully.',
+      userName: existingUser.rows[0].user_name,
     })
   } catch (error) {
     next(error)

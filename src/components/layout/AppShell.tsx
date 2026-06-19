@@ -4,12 +4,16 @@ import type { ScreenId, WithChildren } from '../../types'
 type AppShellProps = WithChildren & {
   activeScreen: ScreenId
   onNavigate: (screen: ScreenId) => void
+  onLogout: () => void
+  userName: string
 }
 
 export function AppShell({
   activeScreen,
   children,
   onNavigate,
+  onLogout,
+  userName,
 }: AppShellProps) {
   return (
     <div className="app-shell">
@@ -40,11 +44,21 @@ export function AppShell({
           ))}
         </nav>
 
+        <div className="sidebar-user">
+          <div>
+            <span>Signed in</span>
+            <strong>{userName}</strong>
+          </div>
+          <button className="logout-button" onClick={onLogout} type="button">
+            Logout
+          </button>
+        </div>
+
         <div className="sidebar-footer">
           <span className="status-dot"></span>
           <div>
-            <strong>Frontend only</strong>
-            <span>Mock data workspace</span>
+            <strong>PostgreSQL connected</strong>
+            <span>Live AUTOPAL workspace</span>
           </div>
         </div>
       </aside>

@@ -32,6 +32,14 @@ After restore, also run these project migrations if needed:
 ```powershell
 psql "NEON_DATABASE_URL" -f backend/sql/create_master_company.sql
 psql "NEON_DATABASE_URL" -f backend/sql/create_pi_rmkt_tables.sql
+psql "NEON_DATABASE_URL" -f backend/sql/create_master_user.sql
+```
+
+Create at least one login user:
+
+```sql
+INSERT INTO master_user (user_name, pw)
+VALUES ('admin', 'change_this_password');
 ```
 
 ## 3. Deploy App on Render
