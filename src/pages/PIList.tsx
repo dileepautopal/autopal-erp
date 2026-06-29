@@ -18,14 +18,23 @@ type PIListProps = {
 type StatusFilter = 'All' | PIStatus
 type SortOrder = 'newest' | 'oldest'
 type PIExtraFields = SavedPI & {
+  cgstAmount?: number
   companyName?: string
   compCode?: number
   custName?: string
   grandTotal?: number
   gstNo?: string
+  igstAmount?: number
+  netTaxableValue?: number
+  sgstAmount?: number
   stateCode?: number
   company?: Company
   customer?: Customer
+}
+
+const toNumber = (value: unknown) => {
+  const number = Number(value ?? 0)
+  return Number.isFinite(number) ? number : 0
 }
 
 const formatDate = (value: string) => {
@@ -53,6 +62,49 @@ const getPICompany = (pi: PIExtraFields, companies: Company[]) => {
 const getPICompanyName = (pi: PIExtraFields, companies: Company[]) => {
   const company = getPICompany(pi, companies)
   return pi.companyName || company?.legalName || 'Company pending'
+}
+
+const getPIGrandTotal = (
+  pi: SavedPI,
+  piRecord: PIExtraFields,
+  company?: Company,
+) => {
+  const storedGrandTotal = toNumber(piRecord.grandTotal)
+
+  if (storedGrandTotal > 0) {
+    return storedGrandTotal
+  }
+
+  const storedHeaderTotal =
+    toNumber(piRecord.netTaxableValue) +
+    toNumber(piRecord.igstAmount) +
+    toNumber(piRecord.cgstAmount) +
+    toNumber(piRecord.sgstAmount) +
+    toNumber(pi.freight) +
+    toNumber(pi.roundOff)
+
+  if (storedHeaderTotal > 0) {
+    return storedHeaderTotal
+  }
+
+  return calculateDomesticInvoiceSummary(
+    pi.lineItems,
+    pi.freight,
+    company?.stateCode,
+    String(piRecord.stateCode ?? ''),
+    {
+      additionalDiscountPercent: pi.additionalDiscountPercent,
+      buyNFlyPercent: pi.buyNFlyPercent,
+      cdPercent: pi.cdPercent,
+      cgstPercent: pi.cgstPercent,
+      igstPercent: pi.igstPercent,
+      otherDiscountPercent: pi.otherDiscountPercent,
+      schemeDiscount: pi.schemeDiscount,
+      sgstPercent: pi.sgstPercent,
+      specialDiscountPercent: pi.specialDiscountPercent,
+      todPercent: pi.todPercent,
+    },
+  ).grandTotal
 }
 
 const toPreviewCustomer = (pi: PIExtraFields): Customer => ({
@@ -92,34 +144,12 @@ export function PIList({
       savedPIs.map((pi) => {
         const piRecord = pi as PIExtraFields
         const company = getPICompany(piRecord, companies)
-        const summary = calculateDomesticInvoiceSummary(
-          pi.lineItems,
-          pi.freight,
-          company?.stateCode,
-          String(piRecord.stateCode ?? ''),
-          {
-            additionalDiscountPercent: pi.additionalDiscountPercent,
-            buyNFlyPercent: pi.buyNFlyPercent,
-            cdPercent: pi.cdPercent,
-            cgstPercent: pi.cgstPercent,
-            igstPercent: pi.igstPercent,
-            otherDiscountPercent: pi.otherDiscountPercent,
-            schemeDiscount: pi.schemeDiscount,
-            sgstPercent: pi.sgstPercent,
-            specialDiscountPercent: pi.specialDiscountPercent,
-            todPercent: pi.todPercent,
-          },
-        )
-        const storedGrandTotal = Number(piRecord.grandTotal ?? 0)
 
         return {
           pi,
           companyName: getPICompanyName(piRecord, companies),
           customerName: getPICustomerName(piRecord),
-          grandTotal:
-            Number.isFinite(storedGrandTotal) && storedGrandTotal > 0
-              ? storedGrandTotal
-              : summary.grandTotal,
+          grandTotal: getPIGrandTotal(pi, piRecord, company),
         }
       }),
     [companies, savedPIs],

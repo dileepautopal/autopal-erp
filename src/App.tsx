@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AppShell } from './components/layout/AppShell'
+import { AdminPanel } from './pages/AdminPanel'
 import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
@@ -8,13 +9,19 @@ import { LoginPage } from './pages/LoginPage'
 import { PIList } from './pages/PIList'
 import { ProductMaster } from './pages/ProductMaster'
 import { RMarketProductRateMaster } from './pages/RMarketProductRateMaster'
+import { WhatsAppPIConnect } from './pages/WhatsAppPIConnect'
 import { apiUrl } from './config/api'
+import { navItems } from './data/mockData'
 import { initialPIForm } from './data/piDefaults'
-import type { Company, PIFormState, SavedPI, ScreenId } from './types'
+import type { Company, PIFormState, SavedPI, ScreenId, UserSession } from './types'
 
 const COMPANY_API_URL = apiUrl('/api/master-companies')
 const PI_RMKT_API_URL = apiUrl('/api/master-pi-rmkt')
 const LOGIN_SESSION_KEY = 'autopal-login-user'
+const getDefaultRights = (isAdmin = false) =>
+  navItems
+    .filter((item) => isAdmin || item.id !== 'admin-panel')
+    .map((item) => item.id)
 
 type APIRecord = Record<string, unknown>
 
@@ -28,22 +35,32 @@ const toText = (value: unknown) => String(value ?? '')
 const getCompanyIdFromCompCode = (compCode: number, companies: Company[]) =>
   companies.find((company) => company.compCode === compCode)?.id ?? ''
 
-const normalizeAPILineItem = (line: APIRecord, index: number) => ({
-  id: toText(line.id) || `line-${index + 1}`,
-  productId: toText(line.productId ?? line.product_id),
-  productCode: toText(line.productCode ?? line.product_code),
-  description: toText(
-    line.description ?? line.productDescription ?? line.product_description,
-  ),
-  hsnCode: toText(line.hsnCode ?? line.hsn_code),
-  unit: toText(line.unit ?? line.productUnit ?? line.product_unit ?? line.uom),
-  quantity: toNumber(line.quantity ?? line.qty),
-  unitPrice: toNumber(line.unitPrice ?? line.rate),
-  gstPercent: toNumber(line.gstPercent ?? line.gst_percent),
-  discountPercent: toNumber(
-    line.discountPercent ?? line.discPercent ?? line.disc_percent,
-  ),
-})
+const normalizeAPILineItem = (line: APIRecord, index: number) => {
+  const quantity = toNumber(line.quantity ?? line.qty)
+  const amount = toNumber(line.amount)
+  const unitPrice = toNumber(line.unitPrice ?? line.rate)
+  const mrp = quantity > 0 && amount > 0
+    ? amount / quantity
+    : toNumber(line.mrp ?? line.listPrice ?? line.list_price)
+
+  return {
+    id: toText(line.id) || `line-${index + 1}`,
+    productId: toText(line.productId ?? line.product_id),
+    productCode: toText(line.productCode ?? line.product_code),
+    description: toText(
+      line.description ?? line.productDescription ?? line.product_description,
+    ),
+    hsnCode: toText(line.hsnCode ?? line.hsn_code),
+    unit: toText(line.unit ?? line.productUnit ?? line.product_unit ?? line.uom),
+    quantity,
+    mrp,
+    unitPrice,
+    gstPercent: toNumber(line.gstPercent ?? line.gst_percent),
+    discountPercent: toNumber(
+      line.discountPercent ?? line.discPercent ?? line.disc_percent,
+    ),
+  }
+}
 
 const apiPIToSavedPI = (pi: APIRecord, companies: Company[] = []): SavedPI => {
   const compCode = toNumber(pi.compCode ?? pi.comp_code)
@@ -56,21 +73,76 @@ const apiPIToSavedPI = (pi: APIRecord, companies: Company[] = []): SavedPI => {
   return {
     ...initialPIForm,
     ...pi,
+    additionalDiscountAmount: toNumber(
+      pi.additionalDiscountAmount ?? pi.additional_discount_amount,
+    ),
+    amountAfterDiscount: toNumber(
+      pi.amountAfterDiscount ?? pi.amount_after_discount,
+    ),
+    basicValue: toNumber(pi.basicValue ?? pi.basic_value),
+    buyNFlyAmount: toNumber(pi.buyNFlyAmount ?? pi.buy_n_fly_amount),
+    cdAmount: toNumber(pi.cdAmount ?? pi.cd_amount),
+    cgstAmount: toNumber(pi.cgstAmount ?? pi.cgst_amount),
+    grandTotal: toNumber(pi.grandTotal ?? pi.grand_total),
     id: toText(pi.id) || toText(pi.piNumber) || `pi-${Date.now()}`,
+    igstAmount: toNumber(pi.igstAmount ?? pi.igst_amount),
     companyId:
       toText(pi.companyId ?? pi.company_id) ||
       getCompanyIdFromCompCode(compCode, companies),
     customerId: toText(pi.customerId ?? pi.customer_id),
+    netBasicValue: toNumber(pi.netBasicValue ?? pi.net_basic_value),
+    netTaxableValue: toNumber(pi.netTaxableValue ?? pi.net_taxable_value),
+    otherDiscountAmount: toNumber(
+      pi.otherDiscountAmount ?? pi.other_discount_amount,
+    ),
     prospectiveGstNo: toText(
       pi.prospectiveGstNo ?? pi.prospective_gst_no ?? pi.gstNo ?? pi.gst_no,
     ),
     piNumber: toText(pi.piNumber),
     piDate: toText(pi.piDate),
     deliveryDate: toText(pi.deliveryDate),
+    sgstAmount: toNumber(pi.sgstAmount ?? pi.sgst_amount),
+    specialDiscountAmount: toNumber(
+      pi.specialDiscountAmount ?? pi.special_discount_amount,
+    ),
     status: pi.status === 'Final' ? 'Final' : 'Draft',
+    todAmount: toNumber(pi.todAmount ?? pi.tod_amount),
     updatedAt: toText(pi.updatedAt ?? pi.updated_at) || new Date().toISOString(),
     lineItems,
   } as SavedPI
+}
+
+const hasProductLines = (pi: SavedPI) =>
+  pi.lineItems.some((line) => line.productCode || line.description)
+
+const loadPIDetailForListRow = async (
+  pi: SavedPI,
+  sourceRecord: APIRecord,
+  companies: Company[],
+) => {
+  if (hasProductLines(pi) || !pi.piNumber) {
+    return pi
+  }
+
+  const compCode = toNumber(
+    sourceRecord.compCode ?? sourceRecord.comp_code ?? (pi as APIRecord).compCode,
+  )
+
+  try {
+    const response = await fetch(
+      `${PI_RMKT_API_URL}/${encodeURIComponent(pi.piNumber)}?compCode=${
+        compCode > 0 ? compCode : 1
+      }`,
+    )
+
+    if (!response.ok) {
+      return pi
+    }
+
+    return apiPIToSavedPI((await response.json()) as APIRecord, companies)
+  } catch {
+    return pi
+  }
 }
 
 const savedPIToForm = (pi: SavedPI): PIFormState => ({
@@ -78,6 +150,7 @@ const savedPIToForm = (pi: SavedPI): PIFormState => ({
   ...pi,
   lineItems: pi.lineItems.map((line) => ({
     ...line,
+    mrp: line.mrp ?? 0,
     discountPercent: line.discountPercent ?? 0,
   })),
 })
@@ -104,21 +177,83 @@ const getPIPrefix = (companyId: string, companies: Company[]) => {
   return company.piPrefix || ''
 }
 
-const getStoredLoginUser = () => {
-  if (typeof window === 'undefined') {
-    return ''
+const normalizeSessionRights = (rights?: ScreenId[], isAdmin = false) => {
+  if (isAdmin) {
+    return getDefaultRights(true)
   }
 
-  return window.sessionStorage.getItem(LOGIN_SESSION_KEY) ?? ''
+  if (!Array.isArray(rights)) {
+    return getDefaultRights(false)
+  }
+
+  const allowedRights = rights.filter(
+    (right) =>
+      navItems.some((item) => item.id === right) && right !== 'admin-panel',
+  )
+
+  return allowedRights
+}
+
+const getStoredLoginSession = (): UserSession | null => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const storedSession = window.sessionStorage.getItem(LOGIN_SESSION_KEY)
+
+  if (!storedSession) {
+    return null
+  }
+
+  try {
+    const parsedSession = JSON.parse(storedSession) as Partial<UserSession> | string
+
+    if (typeof parsedSession === 'string') {
+      return {
+        isAdmin: false,
+        rights: getDefaultRights(false),
+        userName: parsedSession,
+      }
+    }
+
+    const isAdmin = Boolean(parsedSession.isAdmin)
+
+    return {
+      isAdmin,
+      rights: normalizeSessionRights(parsedSession.rights, isAdmin),
+      userName: String(parsedSession.userName ?? ''),
+    }
+  } catch {
+    return {
+      isAdmin: false,
+      rights: getDefaultRights(false),
+      userName: storedSession,
+    }
+  }
 }
 
 function App() {
-  const [loggedInUser, setLoggedInUser] = useState(getStoredLoginUser)
-  const [activeScreen, setActiveScreen] = useState<ScreenId>('create-pi')
+  const [loginSession, setLoginSession] = useState<UserSession | null>(
+    getStoredLoginSession,
+  )
+  const [activeScreen, setActiveScreen] = useState<ScreenId>('dashboard')
   const [companies, setCompanies] = useState<Company[]>([])
   const [piForm, setPiForm] = useState<PIFormState>(initialPIForm)
   const [savedPIs, setSavedPIs] = useState<SavedPI[]>([])
   const [editingPIId, setEditingPIId] = useState<string | null>(null)
+  const visibleNavItems = useMemo(
+    () =>
+      navItems.filter((item) =>
+        loginSession?.rights.includes(item.id),
+      ),
+    [loginSession],
+  )
+  const allowedScreenIds = useMemo(
+    () => new Set(visibleNavItems.map((item) => item.id)),
+    [visibleNavItems],
+  )
+  const firstAllowedScreen = visibleNavItems[0]?.id ?? 'dashboard'
+  const loggedInUser = loginSession?.userName ?? ''
 
   const loadBackendPIs = useCallback(async () => {
     try {
@@ -131,7 +266,15 @@ function App() {
 
       const records = (await response.json()) as APIRecord[]
       const backendPIs = Array.isArray(records)
-        ? records.map((record) => apiPIToSavedPI(record, companies))
+        ? await Promise.all(
+            records.map(async (record) =>
+              loadPIDetailForListRow(
+                apiPIToSavedPI(record, companies),
+                record,
+                companies,
+              ),
+            ),
+          )
         : []
 
       setSavedPIs(backendPIs)
@@ -142,7 +285,7 @@ function App() {
 
   useEffect(() => {
     const syncLoginSession = () => {
-      setLoggedInUser(getStoredLoginUser())
+      setLoginSession(getStoredLoginSession())
     }
 
     window.addEventListener('pageshow', syncLoginSession)
@@ -155,6 +298,12 @@ function App() {
       window.removeEventListener('focus', syncLoginSession)
     }
   }, [])
+
+  useEffect(() => {
+    if (loginSession && !allowedScreenIds.has(activeScreen)) {
+      setActiveScreen(firstAllowedScreen)
+    }
+  }, [activeScreen, allowedScreenIds, firstAllowedScreen, loginSession])
 
   useEffect(() => {
     const loadCompanies = async () => {
@@ -191,6 +340,10 @@ function App() {
   }
 
   const navigate = (screen: ScreenId) => {
+    if (!allowedScreenIds.has(screen)) {
+      return
+    }
+
     if (screen === 'create-pi') {
       openBlankPI()
       return
@@ -289,28 +442,41 @@ function App() {
     }
   }
 
-  const handleLogin = (userName: string) => {
-    setLoggedInUser(userName)
-    window.sessionStorage.setItem(LOGIN_SESSION_KEY, userName)
+  const handleLogin = (session: UserSession) => {
+    const normalizedSession = {
+      ...session,
+      rights: normalizeSessionRights(session.rights, session.isAdmin),
+    }
+    const nextScreen = normalizedSession.rights.includes('dashboard')
+      ? 'dashboard'
+      : normalizedSession.rights[0] ?? 'dashboard'
+
+    setLoginSession(normalizedSession)
+    setActiveScreen(nextScreen)
+    window.sessionStorage.setItem(
+      LOGIN_SESSION_KEY,
+      JSON.stringify(normalizedSession),
+    )
     window.history.replaceState(null, '', window.location.href)
   }
 
   const handleLogout = () => {
     window.sessionStorage.removeItem(LOGIN_SESSION_KEY)
-    setLoggedInUser('')
-    setActiveScreen('create-pi')
+    setLoginSession(null)
+    setActiveScreen('dashboard')
     setPiForm(initialPIForm)
     setEditingPIId(null)
     window.history.replaceState(null, '', window.location.href)
   }
 
-  if (!loggedInUser) {
+  if (!loginSession) {
     return <LoginPage onLogin={handleLogin} />
   }
 
   return (
     <AppShell
       activeScreen={activeScreen}
+      navItems={visibleNavItems}
       onLogout={handleLogout}
       onNavigate={navigate}
       userName={loggedInUser}
@@ -337,10 +503,16 @@ function App() {
           savedPIs={savedPIs}
         />
       )}
+      {activeScreen === 'whatsapp-pi' && (
+        <WhatsAppPIConnect onImported={loadBackendPIs} onNavigate={navigate} />
+      )}
       {activeScreen === 'customers' && <CustomerMaster />}
       {activeScreen === 'products' && <ProductMaster />}
       {activeScreen === 'r-market-rates' && <RMarketProductRateMaster />}
       {activeScreen === 'customer-discounts' && <CustomerDiscountMaster />}
+      {activeScreen === 'admin-panel' && (
+        <AdminPanel currentUserName={loginSession.userName} />
+      )}
     </AppShell>
   )
 }

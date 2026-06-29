@@ -14,10 +14,12 @@ export const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', meta: 'Overview' },
   { id: 'create-pi', label: 'Create PI', meta: 'Primary workspace' },
   { id: 'pi-preview', label: 'PI Preview', meta: 'Document view' },
+  { id: 'whatsapp-pi', label: 'WhatsApp Connect', meta: 'Message import' },
   { id: 'customers', label: 'Customer Master', meta: 'Buyer records' },
   { id: 'products', label: 'Product Master', meta: 'Lamp catalog' },
   { id: 'r-market-rates', label: 'R.Market Rates', meta: 'Trading rates' },
   { id: 'customer-discounts', label: 'Customer Discounts', meta: 'Scheme master' },
+  { id: 'admin-panel', label: 'Admin Panel', meta: 'Users & rights' },
 ]
 
 export const companies: Company[] = [

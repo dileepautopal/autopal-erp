@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { Button } from '../components/ui/Button'
 import { InputField, SelectField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
@@ -13,6 +19,8 @@ import { parseNumber } from '../utils/calculations'
 const ALL_FILTER_VALUE = 'all'
 const CUSTOMER_API_URL = apiUrl('/api/master-customers')
 const CUSTOMER_LOOKUP_API_URL = apiUrl('/api/master-customer-lookups')
+const CUSTOMER_COLUMN_WIDTHS_STORAGE_KEY =
+  'autopal-customer-master-column-widths'
 
 const emptyLookups: MasterCustomerLookups = {
   cities: [],
@@ -40,6 +48,90 @@ const customerTabs: Array<{ id: CustomerTabId; label: string }> = [
   { id: 'contact', label: 'Contact Details' },
   { id: 'credit', label: 'Credit Details' },
 ]
+
+const customerTableColumns = [
+  { defaultWidth: 18, id: 'customer', label: 'Customer', minWidth: 10 },
+  { defaultWidth: 24, id: 'location', label: 'Location', minWidth: 16 },
+  { defaultWidth: 12, id: 'market', label: 'Market', minWidth: 8 },
+  { defaultWidth: 12, id: 'partyType', label: 'Party Type', minWidth: 8 },
+  { defaultWidth: 13, id: 'tax', label: 'GST / PAN', minWidth: 10 },
+  { defaultWidth: 13, id: 'contact', label: 'Contact', minWidth: 10 },
+  { defaultWidth: 8, id: 'actions', label: 'Actions', minWidth: 7 },
+] as const
+
+type CustomerTableColumnId = (typeof customerTableColumns)[number]['id']
+type CustomerColumnWidths = Record<CustomerTableColumnId, number>
+type CustomerColumnResize = {
+  columnId: CustomerTableColumnId
+  nextColumnId: CustomerTableColumnId
+  nextStartWidth: number
+  startWidth: number
+  startX: number
+  tableWidth: number
+}
+
+const getDefaultCustomerColumnWidths = () =>
+  customerTableColumns.reduce(
+    (widths, column) => ({
+      ...widths,
+      [column.id]: column.defaultWidth,
+    }),
+    {} as CustomerColumnWidths,
+  )
+
+const customerColumnMinWidths = customerTableColumns.reduce(
+  (widths, column) => ({
+    ...widths,
+    [column.id]: column.minWidth,
+  }),
+  {} as CustomerColumnWidths,
+)
+
+const getStoredCustomerColumnWidths = () => {
+  const defaultWidths = getDefaultCustomerColumnWidths()
+
+  if (typeof window === 'undefined') {
+    return defaultWidths
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(
+      CUSTOMER_COLUMN_WIDTHS_STORAGE_KEY,
+    )
+
+    if (!storedValue) {
+      return defaultWidths
+    }
+
+    const parsedValue = JSON.parse(storedValue) as Partial<
+      Record<CustomerTableColumnId, unknown>
+    >
+    const storedWidths = customerTableColumns.reduce(
+      (widths, column) => ({
+        ...widths,
+        [column.id]: Number(parsedValue[column.id]),
+      }),
+      {} as CustomerColumnWidths,
+    )
+    const hasValidWidths = customerTableColumns.every(
+      (column) =>
+        Number.isFinite(storedWidths[column.id]) &&
+        storedWidths[column.id] >= column.minWidth,
+    )
+    const totalWidth = customerTableColumns.reduce(
+      (total, column) => total + storedWidths[column.id],
+      0,
+    )
+
+    if (hasValidWidths && Math.abs(totalWidth - 100) < 0.5) {
+      return storedWidths
+    }
+  } catch {
+    // Ignore old or malformed stored layout preferences.
+  }
+
+  return defaultWidths
+}
 
 const getApiErrorMessage = async (response: Response) => {
   try {
@@ -108,6 +200,10 @@ export function CustomerMaster() {
   const [marketFilter, setMarketFilter] = useState(ALL_FILTER_VALUE)
   const [partyTypeFilter, setPartyTypeFilter] = useState(ALL_FILTER_VALUE)
   const [customerPopup, setCustomerPopup] = useState<CustomerPopup | null>(null)
+  const [customerColumnWidths, setCustomerColumnWidths] = useState(
+    getStoredCustomerColumnWidths,
+  )
+  const customerColumnResizeRef = useRef<CustomerColumnResize | null>(null)
 
   useEffect(() => {
     const loadCustomerMaster = async () => {
@@ -152,6 +248,65 @@ export function CustomerMaster() {
     void loadCustomerMaster()
   }, [])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(
+      CUSTOMER_COLUMN_WIDTHS_STORAGE_KEY,
+      JSON.stringify(customerColumnWidths),
+    )
+  }, [customerColumnWidths])
+
+  useEffect(() => {
+    const stopColumnResize = () => {
+      customerColumnResizeRef.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    const resizeColumn = (event: MouseEvent) => {
+      const resize = customerColumnResizeRef.current
+
+      if (!resize) {
+        return
+      }
+
+      const deltaWidth =
+        ((event.clientX - resize.startX) / resize.tableWidth) * 100
+      const minDelta =
+        customerColumnMinWidths[resize.columnId] - resize.startWidth
+      const maxDelta =
+        resize.nextStartWidth -
+        customerColumnMinWidths[resize.nextColumnId]
+      const boundedDelta = Math.min(
+        Math.max(deltaWidth, minDelta),
+        maxDelta,
+      )
+
+      setCustomerColumnWidths((currentWidths) => ({
+        ...currentWidths,
+        [resize.columnId]: Number(
+          (resize.startWidth + boundedDelta).toFixed(2),
+        ),
+        [resize.nextColumnId]: Number(
+          (resize.nextStartWidth - boundedDelta).toFixed(2),
+        ),
+      }))
+    }
+
+    document.addEventListener('mousemove', resizeColumn)
+    document.addEventListener('mouseup', stopColumnResize)
+
+    return () => {
+      document.removeEventListener('mousemove', resizeColumn)
+      document.removeEventListener('mouseup', stopColumnResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [])
+
   const selectedCustomer = useMemo(
     () =>
       editingCustomerId === null
@@ -164,10 +319,6 @@ export function CustomerMaster() {
   const countryOptions = useMemo(
     () => toOptions(lookups.countries, 'Select country'),
     [lookups.countries],
-  )
-  const stateOptions = useMemo(
-    () => toOptions(lookups.states, 'Select state'),
-    [lookups.states],
   )
   const cityOptions = useMemo(
     () => toOptions(lookups.cities, 'Select city'),
@@ -284,15 +435,74 @@ export function CustomerMaster() {
     )
   }
 
+  const startCustomerColumnResize = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    columnIndex: number,
+  ) => {
+    const column = customerTableColumns[columnIndex]
+    const nextColumn = customerTableColumns[columnIndex + 1]
+    const table = event.currentTarget.closest('table')
+    const tableWidth = table?.getBoundingClientRect().width ?? 0
+
+    if (!column || !nextColumn || tableWidth <= 0) {
+      return
+    }
+
+    customerColumnResizeRef.current = {
+      columnId: column.id,
+      nextColumnId: nextColumn.id,
+      nextStartWidth: customerColumnWidths[nextColumn.id],
+      startWidth: customerColumnWidths[column.id],
+      startX: event.clientX,
+      tableWidth,
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    event.preventDefault()
+  }
+
+  const handleCustomerCityChange = (customerId: number, cityCode: string) => {
+    const city = lookups.cities.find((item) => String(item.code) === cityCode)
+    const state =
+      city?.parentCode === undefined
+        ? undefined
+        : lookups.states.find((item) => item.code === city.parentCode)
+
+    setCustomers((currentCustomers) =>
+      currentCustomers.map((customer) =>
+        customer.customerId === customerId
+          ? {
+              ...customer,
+              corrCityCode: city?.code ?? 0,
+              corrCityName: city?.name ?? '',
+              corrStateCode: state?.code ?? 0,
+              corrStateName: state?.name ?? '',
+              shipCityCode: city?.code ?? 0,
+              shipCityName: city?.name ?? '',
+              shipStateCode: state?.code ?? 0,
+              shipStateName: state?.name ?? '',
+            }
+          : customer,
+      ),
+    )
+  }
+
   const addCustomer = () => {
     if (editingCustomerId) {
       setStatusMessage('Save or cancel the current customer first')
       return
     }
 
+    const initialCity = lookups.cities[0]
+    const initialState =
+      (initialCity?.parentCode === undefined
+        ? undefined
+        : lookups.states.find(
+            (state) => state.code === initialCity.parentCode,
+          )) ?? lookups.states[0]
     const countryCode = lookups.countries[0]?.code ?? 0
-    const stateCode = lookups.states[0]?.code ?? 0
-    const cityCode = lookups.cities[0]?.code ?? 0
+    const stateCode = initialState?.code ?? 0
+    const cityCode = initialCity?.code ?? 0
     const marketCode = lookups.markets[0]?.code ?? 0
     const partyTypeCode = lookups.partyTypes[0]?.code ?? 0
 
@@ -301,14 +511,14 @@ export function CustomerMaster() {
       contactPerson: '',
       corrAddress: '',
       corrCityCode: cityCode,
-      corrCityName: getLookupName(cityCode, lookups.cities, ''),
+      corrCityName: initialCity?.name ?? '',
       corrCountryCode: countryCode,
       corrCountryName: getLookupName(countryCode, lookups.countries, ''),
       corrEmail: '',
       corrFax: '',
       corrPinCode: 0,
       corrStateCode: stateCode,
-      corrStateName: getLookupName(stateCode, lookups.states, ''),
+      corrStateName: initialState?.name ?? '',
       corrTel: '',
       creditDays: 0,
       creditLimit: 0,
@@ -326,14 +536,14 @@ export function CustomerMaster() {
       remarks: '',
       shipAddress: '',
       shipCityCode: cityCode,
-      shipCityName: getLookupName(cityCode, lookups.cities, ''),
+      shipCityName: initialCity?.name ?? '',
       shipCountryCode: countryCode,
       shipCountryName: getLookupName(countryCode, lookups.countries, ''),
       shipEmail: '',
       shipFax: '',
       shipPinCode: 0,
       shipStateCode: stateCode,
-      shipStateName: getLookupName(stateCode, lookups.states, ''),
+      shipStateName: initialState?.name ?? '',
       shipTel: '',
       website: '',
       zone: '',
@@ -643,11 +853,9 @@ export function CustomerMaster() {
                 <select
                   className="field-control select-control"
                   onChange={(event) =>
-                    updateCustomerAndShipping(
+                    handleCustomerCityChange(
                       selectedCustomer.customerId,
-                      'corrCityCode',
-                      parseNumber(event.target.value),
-                      'shipCityCode',
+                      event.target.value,
                     )
                   }
                   value={selectedCustomer.corrCityCode || ''}
@@ -678,24 +886,18 @@ export function CustomerMaster() {
               </label>
               <label className="field">
                 <span className="field-label">State</span>
-                <select
-                  className="field-control select-control"
-                  onChange={(event) =>
-                    updateCustomerAndShipping(
-                      selectedCustomer.customerId,
-                      'corrStateCode',
-                      parseNumber(event.target.value),
-                      'shipStateCode',
+                <input
+                  className="field-control"
+                  readOnly
+                  value={
+                    selectedCustomer.corrStateName ||
+                    getLookupName(
+                      selectedCustomer.corrStateCode,
+                      lookups.states,
+                      '',
                     )
                   }
-                  value={selectedCustomer.corrStateCode || ''}
-                >
-                  {stateOptions.map((state) => (
-                    <option key={state.value} value={state.value}>
-                      {state.label}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label className="field">
                 <span className="field-label">Country</span>
@@ -932,7 +1134,7 @@ export function CustomerMaster() {
                     )
                   }
                   type="number"
-                  value={selectedCustomer.creditDays || ''}
+                  value={selectedCustomer.creditDays}
                 />
               </label>
               <label className="field">
@@ -1053,15 +1255,32 @@ export function CustomerMaster() {
         <section className="panel">
           <div className="responsive-table">
             <table className="master-table customer-master-table">
+              <colgroup>
+                {customerTableColumns.map((column) => (
+                  <col
+                    key={column.id}
+                    style={{ width: `${customerColumnWidths[column.id]}%` }}
+                  />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Customer</th>
-                  <th>Location</th>
-                  <th>Market</th>
-                  <th>Party Type</th>
-                  <th>GST / PAN</th>
-                  <th>Contact</th>
-                  <th>Actions</th>
+                  {customerTableColumns.map((column, index) => (
+                    <th className="resizable-column-header" key={column.id}>
+                      <span>{column.label}</span>
+                      {index < customerTableColumns.length - 1 ? (
+                        <button
+                          aria-label={`Resize ${column.label} column`}
+                          className="column-resize-handle"
+                          onMouseDown={(event) =>
+                            startCustomerColumnResize(event, index)
+                          }
+                          title="Drag to resize column"
+                          type="button"
+                        />
+                      ) : null}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>

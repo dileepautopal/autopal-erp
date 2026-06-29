@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
 import pg from 'pg'
+import { createWhatsappPIRouter } from './whatsappPi.js'
 
 const { Pool } = pg
 
@@ -12,6 +13,8 @@ const PORT = Number(process.env.PORT ?? 5000)
 const DIST_PATH = path.resolve(__dirname, '../dist')
 const INDEX_HTML_PATH = path.join(DIST_PATH, 'index.html')
 const USER_TABLE_NAME = 'master_user'
+const USER_RIGHTS_TABLE_NAME = 'master_user_rights'
+const USER_LOGIN_LOG_TABLE_NAME = 'tran_userlog'
 const COMPANY_TABLE_NAME = 'master_company'
 const PRODUCT_TABLE_NAME = 'master_products'
 const CUSTOMER_TABLE_NAME = 'master_customer'
@@ -24,6 +27,22 @@ const TRADING_RATE_TABLE_NAME = 'master_trading_product_rate'
 const CUSTOMER_DISCOUNT_TABLE_NAME = 'master_cust_discount'
 const RMKT_PI_MASTER_TABLE_NAME = 'master_pi_rmkt'
 const RMKT_PI_TRAN_TABLE_NAME = 'tran_pi_rmkt'
+const CUSTOMER_DUPLICATE_MESSAGE =
+  'Customer with same name, address, and city already exists.'
+const MENU_SCREEN_IDS = [
+  'dashboard',
+  'create-pi',
+  'pi-preview',
+  'whatsapp-pi',
+  'customers',
+  'products',
+  'r-market-rates',
+  'customer-discounts',
+  'admin-panel',
+]
+const DEFAULT_USER_SCREEN_IDS = MENU_SCREEN_IDS.filter(
+  (screenId) => screenId !== 'admin-panel',
+)
 
 const useDatabaseSSL =
   process.env.DATABASE_SSL === 'true' ||
@@ -35,6 +54,7 @@ const pool = new Pool({
 })
 
 const app = express()
+app.set('trust proxy', true)
 
 app.use(express.json())
 
@@ -56,7 +76,7 @@ app.use((request, response, next) => {
   }
 
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-autopal-user')
 
   if (request.method === 'OPTIONS') {
     response.sendStatus(204)
@@ -76,12 +96,384 @@ const toNullableInteger = (value) => {
   return Number(value)
 }
 
+const toNullableDecimal = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
 const toNullableDate = (value) => {
   if (!value) {
     return null
   }
 
   return String(value).trim().slice(0, 10)
+}
+
+const getRequestIPAddress = (request) => {
+  const forwardedFor = String(request.headers['x-forwarded-for'] ?? '')
+    .split(',')[0]
+    .trim()
+  const rawAddress =
+    forwardedFor ||
+    request.ip ||
+    request.socket?.remoteAddress ||
+    ''
+
+  return rawAddress.replace(/^::ffff:/, '')
+}
+
+const isPrivateIPAddress = (ipAddress) =>
+  !ipAddress ||
+  ipAddress === '::1' ||
+  ipAddress === '127.0.0.1' ||
+  ipAddress.startsWith('10.') ||
+  ipAddress.startsWith('192.168.') ||
+  /^172\.(1[6-9]|2\d|3[0-1])\./.test(ipAddress)
+
+const getGoogleMapsUrl = (latitude, longitude) =>
+  latitude === null || longitude === null
+    ? ''
+    : `https://www.google.com/maps?q=${latitude},${longitude}`
+
+const isWebLocation = (value) => /^https?:\/\//i.test(String(value ?? ''))
+
+const getGoogleMapsSearchUrl = (value) => {
+  const locationText = String(value ?? '').trim()
+
+  if (!locationText) {
+    return ''
+  }
+
+  if (isWebLocation(locationText)) {
+    return locationText
+  }
+
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    locationText,
+  )}`
+}
+
+const getLocationFromCoordinates = (
+  latitudeValue,
+  longitudeValue,
+  ipAddress = '',
+) => {
+  const latitude = toNullableDecimal(latitudeValue)
+  const longitude = toNullableDecimal(longitudeValue)
+
+  if (latitude === null || longitude === null) {
+    return null
+  }
+
+  return {
+    ipAddress: String(ipAddress ?? ''),
+    latitude,
+    locationText: getGoogleMapsUrl(latitude, longitude),
+    longitude,
+  }
+}
+
+const fetchLocationJSON = async (url) => {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(3500),
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+const lookupIPLocation = async (ipAddress) => {
+  const lookupTarget = isPrivateIPAddress(ipAddress) ? '' : encodeURIComponent(ipAddress)
+  const lookupProviders = [
+    {
+      mapLocation: (result) =>
+        getLocationFromCoordinates(
+          result?.latitude,
+          result?.longitude,
+          result?.ip ?? ipAddress,
+        ),
+      url: lookupTarget
+        ? `https://ipapi.co/${lookupTarget}/json/`
+        : 'https://ipapi.co/json/',
+    },
+    {
+      mapLocation: (result) =>
+        result?.success === false
+          ? null
+          : getLocationFromCoordinates(
+              result?.latitude,
+              result?.longitude,
+              result?.ip ?? ipAddress,
+            ),
+      url: lookupTarget ? `https://ipwho.is/${lookupTarget}` : 'https://ipwho.is/',
+    },
+    {
+      mapLocation: (result) =>
+        getLocationFromCoordinates(
+          result?.latitude,
+          result?.longitude,
+          result?.ip ?? ipAddress,
+        ),
+      url: lookupTarget
+        ? `https://get.geojs.io/v1/ip/geo/${lookupTarget}.json`
+        : 'https://get.geojs.io/v1/ip/geo.json',
+    },
+    {
+      mapLocation: (result) =>
+        result?.status !== 'success'
+          ? null
+          : getLocationFromCoordinates(
+              result?.lat,
+              result?.lon,
+              result?.query ?? ipAddress,
+            ),
+      url: `http://ip-api.com/json/${lookupTarget}?fields=status,message,lat,lon,city,regionName,country,query`,
+    },
+  ]
+
+  for (const provider of lookupProviders) {
+    const result = await fetchLocationJSON(provider.url)
+    const location = result ? provider.mapLocation(result) : null
+
+    if (location) {
+      return location
+    }
+  }
+
+  return null
+}
+
+let userAdministrationSchemaPromise
+
+const ensureUserAdministrationSchema = async () => {
+  if (!userAdministrationSchemaPromise) {
+    userAdministrationSchemaPromise = (async () => {
+      await pool.query(`
+        ALTER TABLE ${USER_TABLE_NAME}
+          ADD COLUMN IF NOT EXISTS is_admin boolean DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
+      `)
+      await pool.query(`
+        UPDATE ${USER_TABLE_NAME}
+        SET
+          is_active = COALESCE(is_active, TRUE),
+          is_admin = COALESCE(is_admin, FALSE),
+          created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+          updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+      `)
+      await pool.query(`
+        UPDATE ${USER_TABLE_NAME}
+        SET is_admin = TRUE
+        WHERE LOWER(user_name) IN ('admin', 'administrator', 'dileep')
+      `)
+      await pool.query(`
+        WITH first_user AS (
+          SELECT user_name
+          FROM ${USER_TABLE_NAME}
+          ORDER BY user_name ASC
+          LIMIT 1
+        )
+        UPDATE ${USER_TABLE_NAME}
+        SET is_admin = TRUE
+        WHERE user_name = (SELECT user_name FROM first_user)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ${USER_TABLE_NAME}
+            WHERE is_admin = TRUE
+          )
+      `)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ${USER_RIGHTS_TABLE_NAME} (
+          user_name varchar(50) NOT NULL REFERENCES ${USER_TABLE_NAME}(user_name) ON DELETE CASCADE,
+          screen_id varchar(80) NOT NULL,
+          can_access boolean NOT NULL DEFAULT TRUE,
+          created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_name, screen_id)
+        )
+      `)
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF to_regclass('tran_userlog') IS NULL
+            AND to_regclass('user_login_log') IS NOT NULL THEN
+            ALTER TABLE user_login_log RENAME TO tran_userlog;
+          END IF;
+        END $$;
+      `)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ${USER_LOGIN_LOG_TABLE_NAME} (
+          id bigserial PRIMARY KEY,
+          user_name varchar(50) NOT NULL,
+          login_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          location_text varchar(255),
+          latitude numeric(10, 7),
+          longitude numeric(10, 7),
+          ip_address varchar(80),
+          user_agent text
+        )
+      `)
+      await pool.query(`
+        ALTER TABLE ${USER_LOGIN_LOG_TABLE_NAME}
+          ADD COLUMN IF NOT EXISTS location_text varchar(500),
+          ADD COLUMN IF NOT EXISTS latitude numeric(10, 7),
+          ADD COLUMN IF NOT EXISTS longitude numeric(10, 7),
+          ADD COLUMN IF NOT EXISTS ip_address varchar(80),
+          ADD COLUMN IF NOT EXISTS user_agent text
+      `)
+      await pool.query(`
+        ALTER TABLE ${USER_LOGIN_LOG_TABLE_NAME}
+          ALTER COLUMN location_text TYPE varchar(500)
+      `)
+      await pool.query(`
+        UPDATE ${USER_LOGIN_LOG_TABLE_NAME}
+        SET location_text = 'https://www.google.com/maps?q=' || latitude || ',' || longitude
+        WHERE latitude IS NOT NULL
+          AND longitude IS NOT NULL
+          AND (
+            location_text IS NULL
+            OR location_text = ''
+            OR location_text !~* '^https?://'
+          )
+      `)
+      await pool.query(`
+        UPDATE ${USER_LOGIN_LOG_TABLE_NAME}
+        SET location_text = 'https://www.google.com/maps/search/?api=1&query=' || REPLACE(location_text, ' ', '%20')
+        WHERE latitude IS NULL
+          AND longitude IS NULL
+          AND location_text IS NOT NULL
+          AND location_text <> ''
+          AND location_text !~* '^https?://'
+      `)
+    })()
+  }
+
+  try {
+    await userAdministrationSchemaPromise
+  } catch (error) {
+    userAdministrationSchemaPromise = undefined
+    throw error
+  }
+}
+
+const sanitizeUserRights = (rights = []) =>
+  Array.from(
+    new Set(
+      rights.filter(
+        (right) => MENU_SCREEN_IDS.includes(right) && right !== 'admin-panel',
+      ),
+    ),
+  )
+
+const normalizeRights = (rights = [], isAdmin = false) => {
+  if (isAdmin) {
+    return [...MENU_SCREEN_IDS]
+  }
+
+  const allowedRights = sanitizeUserRights(rights)
+
+  return allowedRights.length > 0 ? allowedRights : [...DEFAULT_USER_SCREEN_IDS]
+}
+
+const getUserRights = async (userName, isAdmin = false, queryable = pool) => {
+  if (isAdmin) {
+    return [...MENU_SCREEN_IDS]
+  }
+
+  const result = await queryable.query(
+    `
+      SELECT screen_id, can_access
+      FROM ${USER_RIGHTS_TABLE_NAME}
+      WHERE LOWER(user_name) = LOWER($1)
+    `,
+    [userName],
+  )
+
+  if (result.rowCount === 0) {
+    return [...DEFAULT_USER_SCREEN_IDS]
+  }
+
+  return sanitizeUserRights(
+    result.rows
+      .filter((row) => Boolean(row.can_access))
+      .map((row) => row.screen_id),
+  )
+}
+
+const saveUserRights = async (userName, rights = [], queryable = pool) => {
+  const requestedRights = new Set(sanitizeUserRights(rights))
+
+  await queryable.query(
+    `DELETE FROM ${USER_RIGHTS_TABLE_NAME} WHERE LOWER(user_name) = LOWER($1)`,
+    [userName],
+  )
+
+  for (const screenId of DEFAULT_USER_SCREEN_IDS) {
+    await queryable.query(
+      `
+        INSERT INTO ${USER_RIGHTS_TABLE_NAME}
+          (user_name, screen_id, can_access)
+        VALUES
+          ($1, $2, $3)
+        ON CONFLICT (user_name, screen_id)
+        DO UPDATE SET
+          can_access = EXCLUDED.can_access,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+      [userName, screenId, requestedRights.has(screenId)],
+    )
+  }
+}
+
+const getAdminUser = async (request) => {
+  const adminUserName = String(request.get('x-autopal-user') ?? '').trim()
+
+  if (!adminUserName) {
+    return null
+  }
+
+  const result = await pool.query(
+    `
+      SELECT user_name, is_admin, is_active
+      FROM ${USER_TABLE_NAME}
+      WHERE LOWER(user_name) = LOWER($1)
+      LIMIT 1
+    `,
+    [adminUserName],
+  )
+
+  const user = result.rows[0]
+
+  if (!user || !Boolean(user.is_active) || !Boolean(user.is_admin)) {
+    return null
+  }
+
+  return user
+}
+
+const requireAdminUser = async (request, response) => {
+  await ensureUserAdministrationSchema()
+  const user = await getAdminUser(request)
+
+  if (!user) {
+    response.status(403).json({ message: 'Admin access is required.' })
+    return null
+  }
+
+  return user
 }
 
 const productColumns = `
@@ -404,8 +796,11 @@ const validateCustomer = async (customer, existingCustomerId = null) => {
     errors.push('PAN must be exactly 10 characters.')
   }
 
+  if (!Number.isInteger(customer.creditDays) || customer.creditDays < 0) {
+    errors.push('Credit days must be 0 or greater.')
+  }
+
   const integerFields = [
-    ['Credit days', customer.creditDays],
     ['Correspondence city', customer.corrCityCode],
     ['Correspondence state', customer.corrStateCode],
     ['Correspondence country', customer.corrCountryCode],
@@ -502,20 +897,32 @@ const validateCustomer = async (customer, existingCustomerId = null) => {
     }
   }
 
-  if (customer.custName) {
-    const duplicateNameResult = await pool.query(
+  if (
+    customer.custName &&
+    customer.corrAddress &&
+    Number.isInteger(customer.corrCityCode) &&
+    customer.corrCityCode > 0
+  ) {
+    const duplicateCustomerResult = await pool.query(
       `
         SELECT customer_id
         FROM ${CUSTOMER_TABLE_NAME}
-        WHERE LOWER(cust_name) = LOWER($1)
-          AND ($2::text IS NULL OR customer_id::text <> $2::text)
+        WHERE LOWER(BTRIM(cust_name)) = LOWER(BTRIM($1::text))
+          AND LOWER(BTRIM(corr_address)) = LOWER(BTRIM($2::text))
+          AND corr_city_code = $3
+          AND ($4::text IS NULL OR customer_id::text <> $4::text)
         LIMIT 1
       `,
-      [customer.custName, existingCustomerId],
+      [
+        customer.custName,
+        customer.corrAddress,
+        customer.corrCityCode,
+        existingCustomerId,
+      ],
     )
 
-    if (duplicateNameResult.rowCount > 0) {
-      errors.push('Customer name already exists.')
+    if (duplicateCustomerResult.rowCount > 0) {
+      errors.push(CUSTOMER_DUPLICATE_MESSAGE)
     }
   }
 
@@ -684,7 +1091,7 @@ const mapTradingRateRow = (row) => ({
   family: row.family ?? '',
   mrp: Number(row.mrp),
   stdPkg: Number(row.std_pkg),
-  cpno: row.cpno,
+  cpno: row.cpno ?? '',
   minStkQty: Number(row.min_stk_qty),
   dispMrp: Number(row.disp_mrp),
   basicRate: Number(row.basic_rate),
@@ -728,13 +1135,74 @@ const normalizeTradingRatePayload = (payload) => ({
   compCode: toNumber(payload.compCode ?? payload.comp_code),
 })
 
+const getTradingRateCompanyCodeForCategory = (
+  category,
+  fallbackCompanyCode = 1,
+) => {
+  const normalizedCategory = String(category ?? '').trim().toLowerCase()
+
+  if (normalizedCategory === 'head lamp') {
+    return 2
+  }
+
+  if (normalizedCategory === 'halogen bulbs') {
+    return 1
+  }
+
+  return fallbackCompanyCode
+}
+
+const enrichTradingRateFromMasterData = async (rate) => {
+  if (!rate.productCode) {
+    return rate
+  }
+
+  const productResult = await pool.query(
+    `
+      SELECT category, unit
+      FROM ${PRODUCT_TABLE_NAME}
+      WHERE LOWER(code) = LOWER($1)
+      LIMIT 1
+    `,
+    [rate.productCode],
+  )
+
+  if (productResult.rowCount === 0) {
+    return rate
+  }
+
+  const product = productResult.rows[0]
+  const compCode = getTradingRateCompanyCodeForCategory(
+    product.category,
+    rate.compCode || 1,
+  )
+  const companyResult = await pool.query(
+    `
+      SELECT company_id
+      FROM ${COMPANY_TABLE_NAME}
+      WHERE comp_code = $1
+        AND is_active = TRUE
+      LIMIT 1
+    `,
+    [compCode],
+  )
+
+  return {
+    ...rate,
+    catDesc: product.category ?? rate.catDesc,
+    compCode,
+    family: product.category ?? rate.family,
+    plantName: companyResult.rows[0]?.company_id ?? rate.plantName,
+    unitName: product.unit ?? rate.unitName,
+  }
+}
+
 const validateTradingRate = (rate) => {
   const errors = []
   const requiredTextFields = [
     ['Effective date', rate.effDate],
     ['Product code', rate.productCode],
     ['Unit name', rate.unitName],
-    ['CPNO', rate.cpno],
     ['Plant name', rate.plantName],
     ['Category description', rate.catDesc],
   ]
@@ -782,8 +1250,8 @@ const validateTradingRate = (rate) => {
     errors.push('CPNO cannot exceed 50 characters.')
   }
 
-  if (rate.plantName.length > 10) {
-    errors.push('Plant name cannot exceed 10 characters.')
+  if (rate.plantName.length > 50) {
+    errors.push('Plant name cannot exceed 50 characters.')
   }
 
   if (rate.catDesc.length > 100) {
@@ -823,7 +1291,7 @@ const getTradingRateValues = (rate) => [
   rate.family || null,
   rate.mrp,
   rate.stdPkg,
-  rate.cpno,
+  rate.cpno || null,
   rate.minStkQty,
   rate.dispMrp,
   rate.basicRate,
@@ -1836,6 +2304,172 @@ const getRMarketPIPlaceholder = (column, index) => {
   return `$${index}`
 }
 
+const createValidationError = (errors) => {
+  const error = new Error(errors.join(' '))
+  error.statusCode = 400
+  error.errors = errors
+  return error
+}
+
+const saveRMarketPIRecord = async (payload) => {
+  let client
+  let hasTransaction = false
+
+  try {
+    let piPayload = normalizeRMarketPIPayload(payload)
+    piPayload = await resolveRMarketPICustomerContext(piPayload)
+    const errors = validateRMarketPI(piPayload)
+
+    if (errors.length > 0) {
+      throw createValidationError(errors)
+    }
+
+    client = await pool.connect()
+    await client.query('BEGIN')
+    hasTransaction = true
+    await client.query(
+      `LOCK TABLE ${RMKT_PI_MASTER_TABLE_NAME}, ${RMKT_PI_TRAN_TABLE_NAME} IN EXCLUSIVE MODE`,
+    )
+
+    const existingPIResult = await client.query(
+      `
+        SELECT pi_no
+        FROM ${RMKT_PI_MASTER_TABLE_NAME}
+        WHERE pi_no = $1
+          AND pi_series = $2
+          AND comp_code = $3
+        LIMIT 1
+      `,
+      [piPayload.piNo, piPayload.piSeries, piPayload.compCode],
+    )
+    const masterValues = getRMarketPIMasterValues(piPayload)
+    let statusCode = 201
+
+    if (existingPIResult.rowCount > 0) {
+      statusCode = 200
+      const updateAssignments = rMarketPIMasterValueColumns
+        .map(
+          (column, index) =>
+            `${column} = ${getRMarketPIPlaceholder(column, index + 1)}`,
+        )
+        .join(',\n          ')
+      const isActiveParameter = `$${masterValues.length + 1}`
+      const updatedByParameter = `$${masterValues.length + 2}`
+      const piNoParameter = `$${masterValues.length + 3}`
+      const piSeriesParameter = `$${masterValues.length + 4}`
+      const compCodeParameter = `$${masterValues.length + 5}`
+
+      await client.query(
+        `
+          UPDATE ${RMKT_PI_MASTER_TABLE_NAME}
+          SET
+            ${updateAssignments},
+            is_active = ${isActiveParameter},
+            updated_by = ${updatedByParameter},
+            updated_at = CURRENT_TIMESTAMP
+          WHERE pi_no = ${piNoParameter}
+            AND pi_series = ${piSeriesParameter}
+            AND comp_code = ${compCodeParameter}
+        `,
+        [
+          ...masterValues,
+          piPayload.isActive,
+          piPayload.updatedBy,
+          piPayload.piNo,
+          piPayload.piSeries,
+          piPayload.compCode,
+        ],
+      )
+    } else {
+      const insertColumns = [
+        ...rMarketPIMasterValueColumns,
+        'is_active',
+        'created_by',
+      ]
+      const insertPlaceholders = [
+        ...rMarketPIMasterValueColumns.map((column, index) =>
+          getRMarketPIPlaceholder(column, index + 1),
+        ),
+        `$${masterValues.length + 1}`,
+        `$${masterValues.length + 2}`,
+      ].join(', ')
+
+      await client.query(
+        `
+          INSERT INTO ${RMKT_PI_MASTER_TABLE_NAME}
+            (
+              ${insertColumns.join(',\n              ')}
+            )
+          VALUES
+            (
+              ${insertPlaceholders}
+            )
+        `,
+        [...masterValues, piPayload.isActive, piPayload.createdBy],
+      )
+    }
+
+    await client.query(
+      `
+        DELETE FROM ${RMKT_PI_TRAN_TABLE_NAME}
+        WHERE pi_no = $1
+          AND pi_series = $2
+          AND comp_code = $3
+      `,
+      [piPayload.piNo, piPayload.piSeries, piPayload.compCode],
+    )
+
+    const tranInsertColumns = [
+      ...rMarketPITranValueColumns,
+      'is_active',
+      'created_by',
+    ]
+    const tranPlaceholders = tranInsertColumns
+      .map((_column, index) => `$${index + 1}`)
+      .join(', ')
+
+    for (const line of piPayload.lineItems) {
+      await client.query(
+        `
+          INSERT INTO ${RMKT_PI_TRAN_TABLE_NAME}
+            (
+              ${tranInsertColumns.join(',\n              ')}
+            )
+          VALUES
+            (
+              ${tranPlaceholders}
+            )
+        `,
+        [
+          ...getRMarketPILineValues(piPayload, line),
+          piPayload.isActive,
+          piPayload.createdBy,
+        ],
+      )
+    }
+
+    const savedPI = await getRMarketPIByKey(
+      piPayload.piNo,
+      piPayload.piSeries,
+      piPayload.compCode,
+      client,
+    )
+
+    await client.query('COMMIT')
+    hasTransaction = false
+
+    return { savedPI, statusCode }
+  } catch (error) {
+    if (client && hasTransaction) {
+      await client.query('ROLLBACK')
+    }
+
+    throw error
+  } finally {
+    client?.release()
+  }
+}
+
 app.get('/api/health', async (_request, response, next) => {
   try {
     await pool.query('SELECT 1')
@@ -1851,10 +2485,12 @@ app.get('/api/health', async (_request, response, next) => {
 
 app.post('/api/login', async (request, response, next) => {
   try {
+    await ensureUserAdministrationSchema()
     const userName = String(
       request.body.userName ?? request.body.user_name ?? '',
     ).trim()
     const pw = String(request.body.pw ?? '')
+    const loginLocation = request.body.location ?? {}
 
     if (!userName || !pw) {
       response.status(401).json({
@@ -1866,10 +2502,11 @@ app.post('/api/login', async (request, response, next) => {
 
     const result = await pool.query(
       `
-        SELECT user_name
+        SELECT user_name, is_admin, is_active
         FROM ${USER_TABLE_NAME}
         WHERE LOWER(user_name) = LOWER($1)
           AND pw = $2
+          AND is_active = TRUE
         LIMIT 1
       `,
       [userName, pw],
@@ -1883,10 +2520,48 @@ app.post('/api/login', async (request, response, next) => {
       return
     }
 
+    const user = result.rows[0]
+    const rights = await getUserRights(user.user_name, Boolean(user.is_admin))
+    const requestIPAddress = getRequestIPAddress(request)
+    const ipLocation = await lookupIPLocation(requestIPAddress)
+    const clientLatitude = toNullableDecimal(
+      loginLocation.latitude ?? request.body.latitude,
+    )
+    const clientLongitude = toNullableDecimal(
+      loginLocation.longitude ?? request.body.longitude,
+    )
+    const latitude = clientLatitude ?? ipLocation?.latitude ?? null
+    const longitude = clientLongitude ?? ipLocation?.longitude ?? null
+    const locationTextFallback = String(
+      loginLocation.locationText ?? request.body.locationText ?? '',
+    ).trim()
+    const locationText =
+      getGoogleMapsUrl(latitude, longitude) ||
+      getGoogleMapsSearchUrl(locationTextFallback)
+
+    await pool.query(
+      `
+        INSERT INTO ${USER_LOGIN_LOG_TABLE_NAME}
+          (user_name, location_text, latitude, longitude, ip_address, user_agent)
+        VALUES
+          ($1, $2, $3, $4, $5, $6)
+      `,
+      [
+        user.user_name,
+        locationText,
+        latitude,
+        longitude,
+        ipLocation?.ipAddress ?? requestIPAddress,
+        request.get('user-agent') ?? '',
+      ],
+    )
+
     response.json({
       authorized: true,
+      isAdmin: Boolean(user.is_admin),
       message: 'Login successful.',
-      userName: result.rows[0].user_name,
+      rights,
+      userName: user.user_name,
     })
   } catch (error) {
     next(error)
@@ -1895,6 +2570,7 @@ app.post('/api/login', async (request, response, next) => {
 
 app.post('/api/change-password', async (request, response, next) => {
   try {
+    await ensureUserAdministrationSchema()
     const userName = String(
       request.body.userName ?? request.body.user_name ?? '',
     ).trim()
@@ -1917,6 +2593,7 @@ app.post('/api/change-password', async (request, response, next) => {
         FROM ${USER_TABLE_NAME}
         WHERE LOWER(user_name) = LOWER($1)
           AND pw = $2
+          AND is_active = TRUE
         LIMIT 1
       `,
       [userName, oldPw],
@@ -1946,6 +2623,232 @@ app.post('/api/change-password', async (request, response, next) => {
     })
   } catch (error) {
     next(error)
+  }
+})
+
+const getAdminUserList = async () => {
+  const [usersResult, rightsResult] = await Promise.all([
+    pool.query(`
+      SELECT
+        u.user_name,
+        u.is_admin,
+        u.is_active,
+        TO_CHAR(u.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS created_at,
+        TO_CHAR(u.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS updated_at,
+        (
+          SELECT TO_CHAR(log.login_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS')
+          FROM ${USER_LOGIN_LOG_TABLE_NAME} log
+          WHERE LOWER(log.user_name) = LOWER(u.user_name)
+          ORDER BY log.login_at DESC
+          LIMIT 1
+        ) AS last_login_at,
+        (
+          SELECT
+            CASE
+              WHEN log.latitude IS NOT NULL AND log.longitude IS NOT NULL THEN
+                'https://www.google.com/maps?q=' || log.latitude || ',' || log.longitude
+              ELSE COALESCE(NULLIF(log.location_text, ''), log.ip_address, '')
+            END
+          FROM ${USER_LOGIN_LOG_TABLE_NAME} log
+          WHERE LOWER(log.user_name) = LOWER(u.user_name)
+          ORDER BY log.login_at DESC
+          LIMIT 1
+        ) AS last_login_location
+      FROM ${USER_TABLE_NAME} u
+      ORDER BY u.user_name ASC
+    `),
+    pool.query(`
+      SELECT user_name, screen_id, can_access
+      FROM ${USER_RIGHTS_TABLE_NAME}
+    `),
+  ])
+  const rightsByUser = new Map()
+
+  rightsResult.rows.forEach((row) => {
+    const key = String(row.user_name).toLowerCase()
+    const existingRights = rightsByUser.get(key) ?? []
+
+    if (Boolean(row.can_access)) {
+      existingRights.push(row.screen_id)
+    }
+
+    rightsByUser.set(key, existingRights)
+  })
+
+  return usersResult.rows.map((row) => ({
+    isActive: Boolean(row.is_active),
+    isAdmin: Boolean(row.is_admin),
+    lastLoginAt: row.last_login_at ?? '',
+    lastLoginLocation: row.last_login_location ?? '',
+    rights: Boolean(row.is_admin)
+      ? [...MENU_SCREEN_IDS]
+      : rightsByUser.has(String(row.user_name).toLowerCase())
+        ? sanitizeUserRights(
+            rightsByUser.get(String(row.user_name).toLowerCase()) ?? [],
+          )
+        : normalizeRights([], false),
+    userName: row.user_name,
+  }))
+}
+
+app.get('/api/admin/users', async (request, response, next) => {
+  try {
+    const adminUser = await requireAdminUser(request, response)
+
+    if (!adminUser) {
+      return
+    }
+
+    response.json(await getAdminUserList())
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/admin/users', async (request, response, next) => {
+  let client
+  let hasTransaction = false
+
+  try {
+    const adminUser = await requireAdminUser(request, response)
+
+    if (!adminUser) {
+      return
+    }
+
+    const userName = String(
+      request.body.userName ?? request.body.user_name ?? '',
+    ).trim()
+    const pw = String(request.body.pw ?? request.body.password ?? '')
+    const isAdmin = Boolean(request.body.isAdmin ?? request.body.is_admin)
+    const isActive = request.body.isActive ?? request.body.is_active ?? true
+    const rights = Array.isArray(request.body.rights)
+      ? request.body.rights.map((right) => String(right))
+      : DEFAULT_USER_SCREEN_IDS
+
+    if (!userName) {
+      response.status(400).json({ message: 'User name is required.' })
+      return
+    }
+
+    client = await pool.connect()
+    await client.query('BEGIN')
+    hasTransaction = true
+
+    const existingUser = await client.query(
+      `SELECT user_name FROM ${USER_TABLE_NAME} WHERE LOWER(user_name) = LOWER($1)`,
+      [userName],
+    )
+
+    if (existingUser.rowCount === 0 && !pw) {
+      response.status(400).json({ message: 'Password is required for new user.' })
+      await client.query('ROLLBACK')
+      hasTransaction = false
+      return
+    }
+
+    await client.query(
+      `
+        INSERT INTO ${USER_TABLE_NAME}
+          (user_name, pw, is_admin, is_active, created_at, updated_at)
+        VALUES
+          ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_name)
+        DO UPDATE SET
+          pw = CASE WHEN EXCLUDED.pw <> '' THEN EXCLUDED.pw ELSE ${USER_TABLE_NAME}.pw END,
+          is_admin = EXCLUDED.is_admin,
+          is_active = EXCLUDED.is_active,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+      [userName, pw, isAdmin, Boolean(isActive)],
+    )
+
+    if (isAdmin) {
+      await client.query(
+        `DELETE FROM ${USER_RIGHTS_TABLE_NAME} WHERE LOWER(user_name) = LOWER($1)`,
+        [userName],
+      )
+    } else {
+      await saveUserRights(userName, rights, client)
+    }
+
+    await client.query('COMMIT')
+    hasTransaction = false
+    response.json(await getAdminUserList())
+  } catch (error) {
+    if (hasTransaction) {
+      await client?.query('ROLLBACK')
+    }
+
+    next(error)
+  } finally {
+    client?.release()
+  }
+})
+
+app.put('/api/admin/users/:userName/rights', async (request, response, next) => {
+  let client
+  let hasTransaction = false
+
+  try {
+    const adminUser = await requireAdminUser(request, response)
+
+    if (!adminUser) {
+      return
+    }
+
+    const userName = String(request.params.userName ?? '').trim()
+    const pw = String(request.body.pw ?? request.body.password ?? '')
+    const isAdmin = Boolean(request.body.isAdmin ?? request.body.is_admin)
+    const isActive = request.body.isActive ?? request.body.is_active ?? true
+    const rights = Array.isArray(request.body.rights)
+      ? request.body.rights.map((right) => String(right))
+      : DEFAULT_USER_SCREEN_IDS
+
+    client = await pool.connect()
+    await client.query('BEGIN')
+    hasTransaction = true
+
+    const updateResult = await client.query(
+      `
+        UPDATE ${USER_TABLE_NAME}
+        SET
+          pw = CASE WHEN $2 <> '' THEN $2 ELSE pw END,
+          is_admin = $3,
+          is_active = $4,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE LOWER(user_name) = LOWER($1)
+      `,
+      [userName, pw, isAdmin, Boolean(isActive)],
+    )
+
+    if (updateResult.rowCount === 0) {
+      response.status(404).json({ message: 'User not found.' })
+      await client.query('ROLLBACK')
+      hasTransaction = false
+      return
+    }
+
+    if (isAdmin) {
+      await client.query(
+        `DELETE FROM ${USER_RIGHTS_TABLE_NAME} WHERE LOWER(user_name) = LOWER($1)`,
+        [userName],
+      )
+    } else {
+      await saveUserRights(userName, rights, client)
+    }
+
+    await client.query('COMMIT')
+    hasTransaction = false
+    response.json(await getAdminUserList())
+  } catch (error) {
+    if (hasTransaction) {
+      await client?.query('ROLLBACK')
+    }
+
+    next(error)
+  } finally {
+    client?.release()
   }
 })
 
@@ -2417,7 +3320,9 @@ tradingRateRoutes.get('/:id', async (request, response, next) => {
 
 tradingRateRoutes.post('/', async (request, response, next) => {
   try {
-    const ratePayload = normalizeTradingRatePayload(request.body)
+    const ratePayload = await enrichTradingRateFromMasterData(
+      normalizeTradingRatePayload(request.body),
+    )
     const errors = validateTradingRate(ratePayload)
 
     if (errors.length > 0) {
@@ -2496,7 +3401,9 @@ tradingRateRoutes.put('/:id', async (request, response, next) => {
       return
     }
 
-    const ratePayload = normalizeTradingRatePayload(request.body)
+    const ratePayload = await enrichTradingRateFromMasterData(
+      normalizeTradingRatePayload(request.body),
+    )
     const errors = validateTradingRate(ratePayload)
 
     if (errors.length > 0) {
@@ -2732,7 +3639,47 @@ rMarketPIRoutes.get('/', async (_request, response, next) => {
       ORDER BY pi_date DESC, pi_no DESC
     `)
 
-    response.json(result.rows.map(mapRMarketPIMasterRow))
+    if (result.rowCount === 0) {
+      response.json([])
+      return
+    }
+
+    const tranResult = await pool.query(`
+      SELECT ${rMarketPITranColumns}
+      FROM ${RMKT_PI_TRAN_TABLE_NAME} t
+      LEFT JOIN ${PRODUCT_TABLE_NAME} p
+        ON LOWER(p.code) = LOWER(t.product_code)
+      WHERE t.is_active = TRUE
+        AND EXISTS (
+          SELECT 1
+          FROM ${RMKT_PI_MASTER_TABLE_NAME} m
+          WHERE m.pi_no = t.pi_no
+            AND m.pi_series = t.pi_series
+            AND m.comp_code = t.comp_code
+            AND m.is_active = TRUE
+        )
+      ORDER BY t.pi_series ASC, t.pi_no DESC, t.product_code ASC
+    `)
+    const linesByPIKey = new Map()
+
+    tranResult.rows.forEach((row) => {
+      const key = `${row.pi_series}-${row.pi_no}-${row.comp_code}`
+      const existingLines = linesByPIKey.get(key) ?? []
+
+      existingLines.push(mapRMarketPITranRow(row))
+      linesByPIKey.set(key, existingLines)
+    })
+
+    response.json(
+      result.rows.map((row) => {
+        const key = `${row.pi_series}-${row.pi_no}-${row.comp_code}`
+
+        return {
+          ...mapRMarketPIMasterRow(row),
+          lineItems: linesByPIKey.get(key) ?? [],
+        }
+      }),
+    )
   } catch (error) {
     next(error)
   }
@@ -2760,162 +3707,17 @@ rMarketPIRoutes.get('/:id', async (request, response, next) => {
 })
 
 rMarketPIRoutes.post('/', async (request, response, next) => {
-  let client
-  let hasTransaction = false
-
   try {
-    let piPayload = normalizeRMarketPIPayload(request.body)
-    piPayload = await resolveRMarketPICustomerContext(piPayload)
-    const errors = validateRMarketPI(piPayload)
-
-    if (errors.length > 0) {
-      response.status(400).json({ errors })
-      return
-    }
-
-    client = await pool.connect()
-    await client.query('BEGIN')
-    hasTransaction = true
-    await client.query(
-      `LOCK TABLE ${RMKT_PI_MASTER_TABLE_NAME}, ${RMKT_PI_TRAN_TABLE_NAME} IN EXCLUSIVE MODE`,
-    )
-
-    const existingPIResult = await client.query(
-      `
-        SELECT pi_no
-        FROM ${RMKT_PI_MASTER_TABLE_NAME}
-        WHERE pi_no = $1
-          AND pi_series = $2
-          AND comp_code = $3
-        LIMIT 1
-      `,
-      [piPayload.piNo, piPayload.piSeries, piPayload.compCode],
-    )
-    const masterValues = getRMarketPIMasterValues(piPayload)
-    let statusCode = 201
-
-    if (existingPIResult.rowCount > 0) {
-      statusCode = 200
-      const updateAssignments = rMarketPIMasterValueColumns
-        .map(
-          (column, index) =>
-            `${column} = ${getRMarketPIPlaceholder(column, index + 1)}`,
-        )
-        .join(',\n          ')
-      const isActiveParameter = `$${masterValues.length + 1}`
-      const updatedByParameter = `$${masterValues.length + 2}`
-      const piNoParameter = `$${masterValues.length + 3}`
-      const piSeriesParameter = `$${masterValues.length + 4}`
-      const compCodeParameter = `$${masterValues.length + 5}`
-
-      await client.query(
-        `
-          UPDATE ${RMKT_PI_MASTER_TABLE_NAME}
-          SET
-            ${updateAssignments},
-            is_active = ${isActiveParameter},
-            updated_by = ${updatedByParameter},
-            updated_at = CURRENT_TIMESTAMP
-          WHERE pi_no = ${piNoParameter}
-            AND pi_series = ${piSeriesParameter}
-            AND comp_code = ${compCodeParameter}
-        `,
-        [
-          ...masterValues,
-          piPayload.isActive,
-          piPayload.updatedBy,
-          piPayload.piNo,
-          piPayload.piSeries,
-          piPayload.compCode,
-        ],
-      )
-    } else {
-      const insertColumns = [
-        ...rMarketPIMasterValueColumns,
-        'is_active',
-        'created_by',
-      ]
-      const insertPlaceholders = [
-        ...rMarketPIMasterValueColumns.map((column, index) =>
-          getRMarketPIPlaceholder(column, index + 1),
-        ),
-        `$${masterValues.length + 1}`,
-        `$${masterValues.length + 2}`,
-      ].join(', ')
-
-      await client.query(
-        `
-          INSERT INTO ${RMKT_PI_MASTER_TABLE_NAME}
-            (
-              ${insertColumns.join(',\n              ')}
-            )
-          VALUES
-            (
-              ${insertPlaceholders}
-            )
-        `,
-        [...masterValues, piPayload.isActive, piPayload.createdBy],
-      )
-    }
-
-    await client.query(
-      `
-        DELETE FROM ${RMKT_PI_TRAN_TABLE_NAME}
-        WHERE pi_no = $1
-          AND pi_series = $2
-          AND comp_code = $3
-      `,
-      [piPayload.piNo, piPayload.piSeries, piPayload.compCode],
-    )
-
-    const tranInsertColumns = [
-      ...rMarketPITranValueColumns,
-      'is_active',
-      'created_by',
-    ]
-    const tranPlaceholders = tranInsertColumns
-      .map((_column, index) => `$${index + 1}`)
-      .join(', ')
-
-    for (const line of piPayload.lineItems) {
-      await client.query(
-        `
-          INSERT INTO ${RMKT_PI_TRAN_TABLE_NAME}
-            (
-              ${tranInsertColumns.join(',\n              ')}
-            )
-          VALUES
-            (
-              ${tranPlaceholders}
-            )
-        `,
-        [
-          ...getRMarketPILineValues(piPayload, line),
-          piPayload.isActive,
-          piPayload.createdBy,
-        ],
-      )
-    }
-
-    const savedPI = await getRMarketPIByKey(
-      piPayload.piNo,
-      piPayload.piSeries,
-      piPayload.compCode,
-      client,
-    )
-
-    await client.query('COMMIT')
-    hasTransaction = false
+    const { savedPI, statusCode } = await saveRMarketPIRecord(request.body)
 
     response.status(statusCode).json(savedPI)
   } catch (error) {
-    if (client && hasTransaction) {
-      await client.query('ROLLBACK')
+    if (error.statusCode === 400 && Array.isArray(error.errors)) {
+      response.status(400).json({ errors: error.errors })
+      return
     }
 
     next(error)
-  } finally {
-    client?.release()
   }
 })
 
@@ -2990,6 +3792,24 @@ app.use('/api/master-cust-discount', customerDiscountRoutes)
 app.use('/api/customer-discounts', customerDiscountRoutes)
 app.use('/api/master-pi-rmkt', rMarketPIRoutes)
 app.use('/api/r-market-pis', rMarketPIRoutes)
+app.use(
+  '/api/whatsapp-pi',
+  createWhatsappPIRouter({
+    pool,
+    saveRMarketPIRecord,
+    tableNames: {
+      city: CITY_TABLE_NAME,
+      company: COMPANY_TABLE_NAME,
+      country: COUNTRY_TABLE_NAME,
+      customer: CUSTOMER_TABLE_NAME,
+      partyType: PARTY_TYPE_TABLE_NAME,
+      piMaster: RMKT_PI_MASTER_TABLE_NAME,
+      product: PRODUCT_TABLE_NAME,
+      state: STATE_TABLE_NAME,
+      tradingRate: TRADING_RATE_TABLE_NAME,
+    },
+  }),
+)
 
 if (fs.existsSync(DIST_PATH)) {
   app.use(express.static(DIST_PATH))
@@ -3004,8 +3824,41 @@ app.get(/^(?!\/api).*/, (_request, response, next) => {
   response.sendFile(INDEX_HTML_PATH)
 })
 
+const getUniqueConstraintMessage = (error) => {
+  if (error?.code !== '23505') {
+    return ''
+  }
+
+  const constraint = String(error.constraint ?? '')
+  const table = String(error.table ?? '')
+
+  if (constraint.includes('master_customer_name_address_city')) {
+    return CUSTOMER_DUPLICATE_MESSAGE
+  }
+
+  if (table === CUSTOMER_TABLE_NAME && constraint.includes('cust_name')) {
+    return 'Customer name is still unique in PostgreSQL. Run the customer unique-key migration so duplicate checking uses name, address, and city.'
+  }
+
+  if (table === CUSTOMER_TABLE_NAME && constraint.includes('cust_code')) {
+    return 'Customer code already exists.'
+  }
+
+  return 'Duplicate record already exists.'
+}
+
 app.use((error, _request, response, _next) => {
   console.error(error)
+  const uniqueConstraintMessage = getUniqueConstraintMessage(error)
+
+  if (uniqueConstraintMessage) {
+    response.status(400).json({
+      errors: [uniqueConstraintMessage],
+      message: uniqueConstraintMessage,
+    })
+    return
+  }
+
   response.status(500).json({
     message: 'Internal server error.',
     detail:

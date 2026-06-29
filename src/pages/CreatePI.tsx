@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { PIPreviewPanel } from '../components/pi/PIPreviewPanel'
 import { Button } from '../components/ui/Button'
 import { InputField, SelectField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
@@ -149,16 +150,29 @@ const getTradingRateValue = (
 const calculateLineRow = (line: LineItem): LineRowCalculation => {
   const amount = roundMoney(line.quantity * line.unitPrice)
   const discountAmount = roundMoney((amount * line.discountPercent) / 100)
-  const basic = roundMoney(amount - discountAmount)
 
   return {
     amount,
-    basic,
+    basic: amount,
     discountAmount,
   }
 }
 
-const getSchemePercent = (
+const getTradingRateMrp = (
+  rate?: TradingProductRate,
+  partyTypeName = '',
+) => {
+  if (!rate) {
+    return 0
+  }
+
+  return rate.mrp || rate.dispMrp || getTradingRateValue(rate, partyTypeName)
+}
+
+const getDiscountedRate = (mrp: number, discountPercent: number) =>
+  roundMoney(mrp - (mrp * discountPercent) / 100)
+
+const getCustomerDiscountPercent = (
   category: string,
   discount?: CustomerDiscount,
 ) => {
@@ -182,7 +196,46 @@ const getSchemePercent = (
     return discount.haloPer
   }
 
+  if (
+    normalizedCategory.includes('incandescent') ||
+    normalizedCategory.includes('incd')
+  ) {
+    return discount.incdPer
+  }
+
+  if (normalizedCategory.includes('wiper')) {
+    return discount.wiperPer
+  }
+
   return 0
+}
+
+const getCustomerDiscountForMasterCustomer = (
+  customer: MasterCustomer | undefined,
+  discounts: CustomerDiscount[],
+  companyCode: number,
+) => {
+  if (!customer) {
+    return undefined
+  }
+
+  const matchingDiscounts = discounts
+    .filter(
+      (discount) =>
+        discount.custCode === customer.custCode &&
+        discount.isActive,
+    )
+    .sort(
+      (firstDiscount, secondDiscount) =>
+        getRateDateValue(secondDiscount.effDate) -
+        getRateDateValue(firstDiscount.effDate),
+    )
+
+  return (
+    matchingDiscounts.find(
+      (discount) => discount.compCode === companyCode,
+    ) ?? matchingDiscounts[0]
+  )
 }
 
 const toCustomerPreview = (
@@ -344,29 +397,15 @@ export function CreatePI({
   const currency = form.currency || 'INR'
   const selectedCompanyCode = selectedCompany?.compCode ?? 0
 
-  const selectedCustomerDiscount = useMemo(() => {
-    if (!selectedMasterCustomer) {
-      return undefined
-    }
-
-    const matchingDiscounts = customerDiscountRows
-      .filter(
-        (discount) =>
-          discount.custCode === selectedMasterCustomer.custCode &&
-          discount.isActive,
-      )
-      .sort(
-        (firstDiscount, secondDiscount) =>
-          getRateDateValue(secondDiscount.effDate) -
-          getRateDateValue(firstDiscount.effDate),
-      )
-
-    return (
-      matchingDiscounts.find(
-        (discount) => discount.compCode === selectedCompanyCode,
-      ) ?? matchingDiscounts[0]
-    )
-  }, [customerDiscountRows, selectedCompanyCode, selectedMasterCustomer])
+  const selectedCustomerDiscount = useMemo(
+    () =>
+      getCustomerDiscountForMasterCustomer(
+        selectedMasterCustomer,
+        customerDiscountRows,
+        selectedCompanyCode,
+      ),
+    [customerDiscountRows, selectedCompanyCode, selectedMasterCustomer],
+  )
 
   const customerOptions = useMemo<FieldOption[]>(() => {
     return [
@@ -374,10 +413,14 @@ export function CreatePI({
         value: '',
         label: masterCustomers.length > 0 ? 'Select customer' : 'No customers loaded',
       },
-      ...masterCustomers.map((customer) => ({
-        value: String(customer.customerId),
-        label: `${customer.custCode} - ${customer.custName}`,
-      })),
+      ...[...masterCustomers]
+        .sort((firstCustomer, secondCustomer) =>
+          firstCustomer.custName.localeCompare(secondCustomer.custName),
+        )
+        .map((customer) => ({
+          value: String(customer.customerId),
+          label: customer.custName,
+        })),
     ]
   }, [masterCustomers])
 
@@ -483,19 +526,38 @@ export function CreatePI({
   const applyPartyTypeRates = (
     lineItems: LineItem[],
     partyTypeName: string,
+    customerDiscount = selectedCustomerDiscount,
   ) =>
     lineItems.map((lineItem) => {
       if (!lineItem.productCode) {
         return lineItem
       }
 
+      const product =
+        productRows.find((item) => item.id === lineItem.productId) ??
+        productRows.find(
+          (item) =>
+            item.code.trim().toLowerCase() ===
+            lineItem.productCode.trim().toLowerCase(),
+        )
       const tradingRate = rateByProductCode.get(
         lineItem.productCode.trim().toLowerCase(),
+      )
+      const category =
+        product?.category ?? tradingRate?.catDesc ?? tradingRate?.family ?? ''
+      const mrp =
+        getTradingRateMrp(tradingRate, partyTypeName) ||
+        lineItem.mrp ||
+        lineItem.unitPrice
+      const discountPercent = getCustomerDiscountPercent(
+        category,
+        customerDiscount,
       )
 
       return {
         ...lineItem,
-        unitPrice: getTradingRateValue(tradingRate, partyTypeName),
+        mrp,
+        unitPrice: getDiscountedRate(mrp, discountPercent),
       }
     })
 
@@ -507,31 +569,17 @@ export function CreatePI({
   const schemeDiscount = useMemo(
     () =>
       roundMoney(
-        form.lineItems.reduce((discountTotal, line, index) => {
-          const product =
-            productRows.find((item) => item.id === line.productId) ??
-            productRows.find(
-              (item) =>
-                item.code.trim().toLowerCase() ===
-                line.productCode.trim().toLowerCase(),
-            )
-          const schemePercent = getSchemePercent(
-            product?.category ?? '',
-            selectedCustomerDiscount,
-          )
-
-          return (
-            discountTotal +
-            roundMoney((lineCalculations[index].basic * schemePercent) / 100)
-          )
-        }, 0),
+        lineCalculations.reduce(
+          (discountTotal, line) => discountTotal + line.discountAmount,
+          0,
+        ),
       ),
-    [form.lineItems, lineCalculations, productRows, selectedCustomerDiscount],
+    [lineCalculations],
   )
 
   const commercial = useMemo(() => {
     const basicValue = roundMoney(
-      lineCalculations.reduce((sum, line) => sum + line.basic, 0),
+      lineCalculations.reduce((sum, line) => sum + line.amount, 0),
     )
     const netBasicValue = roundMoney(basicValue - schemeDiscount)
     const specialDiscountAmount = roundMoney(
@@ -558,9 +606,9 @@ export function CreatePI({
         additionalDiscountAmount -
         buyNFlyAmount,
     )
-    const igstAmount = roundMoney((netTaxableValue * form.igstPercent) / 100)
-    const cgstAmount = roundMoney((netTaxableValue * form.cgstPercent) / 100)
-    const sgstAmount = roundMoney((netTaxableValue * form.sgstPercent) / 100)
+    const igstAmount = Math.round((netTaxableValue * form.igstPercent) / 100)
+    const cgstAmount = Math.round((netTaxableValue * form.cgstPercent) / 100)
+    const sgstAmount = Math.round((netTaxableValue * form.sgstPercent) / 100)
     const grandTotalBeforeRoundOff = roundMoney(
       netTaxableValue +
         igstAmount +
@@ -605,6 +653,16 @@ export function CreatePI({
     schemeDiscount,
   ])
 
+  const previewForm = useMemo(
+    () => ({
+      ...form,
+      discount: schemeDiscount,
+      roundOff: commercial.roundOff,
+      schemeDiscount,
+    }),
+    [commercial.roundOff, form, schemeDiscount],
+  )
+
   const updateForm = <Key extends keyof PIFormState>(
     key: Key,
     value: PIFormState[Key],
@@ -620,10 +678,23 @@ export function CreatePI({
   }
 
   const handleCompanyChange = (companyId: string) => {
+    const nextCompanyCode =
+      companies.find((company) => company.id === companyId)?.compCode ?? 0
+    const customerDiscount = getCustomerDiscountForMasterCustomer(
+      selectedMasterCustomer,
+      customerDiscountRows,
+      nextCompanyCode,
+    )
+
     onFormChange({
       ...form,
       companyId,
       piNumber: generatePINumber?.(companyId) ?? '',
+      lineItems: applyPartyTypeRates(
+        form.lineItems,
+        form.partyTypeName,
+        customerDiscount,
+      ),
     })
   }
 
@@ -634,6 +705,11 @@ export function CreatePI({
 
     if (masterCustomer) {
       const partyTypeName = masterCustomer.partyTypeName
+      const customerDiscount = getCustomerDiscountForMasterCustomer(
+        masterCustomer,
+        customerDiscountRows,
+        selectedCompanyCode,
+      )
 
       onFormChange({
         ...form,
@@ -654,7 +730,11 @@ export function CreatePI({
         partyTypeCode: String(masterCustomer.partyTypeCode || ''),
         partyTypeName,
         destination: masterCustomer.corrCityName,
-        lineItems: applyPartyTypeRates(form.lineItems, partyTypeName),
+        lineItems: applyPartyTypeRates(
+          form.lineItems,
+          partyTypeName,
+          customerDiscount,
+        ),
       })
       return
     }
@@ -678,7 +758,7 @@ export function CreatePI({
       partyTypeCode: '',
       partyTypeName: '',
       destination: '',
-      lineItems: applyPartyTypeRates(form.lineItems, ''),
+      lineItems: applyPartyTypeRates(form.lineItems, '', undefined),
     })
   }
 
@@ -691,6 +771,11 @@ export function CreatePI({
     })
   }
 
+  const handleLineDiscountChange = (id: string, value: string) => {
+    const discountPercent = parseNumber(value)
+    updateLineItem(id, { discountPercent })
+  }
+
   const selectProduct = (rowId: string, productValue: string) => {
     const product = productRows.find(
       (item) => item.id === productValue || item.code === productValue,
@@ -699,8 +784,10 @@ export function CreatePI({
     if (!product) {
       updateLineItem(rowId, {
         description: '',
+        discountPercent: 0,
         gstPercent: 0,
         hsnCode: '',
+        mrp: 0,
         productCode: '',
         productId: '',
         unit: '',
@@ -710,15 +797,25 @@ export function CreatePI({
     }
 
     const tradingRate = rateByProductCode.get(product.code.trim().toLowerCase())
+    const category =
+      product.category ?? tradingRate?.catDesc ?? tradingRate?.family ?? ''
+    const mrp = getTradingRateMrp(tradingRate, form.partyTypeName)
+    const customerDiscountPercent = getCustomerDiscountPercent(
+      category,
+      selectedCustomerDiscount,
+    )
+    const existingLine = form.lineItems.find((line) => line.id === rowId)
 
     updateLineItem(rowId, {
       description: product.description,
+      discountPercent: existingLine?.discountPercent ?? 0,
       gstPercent: product.gstPercent,
       hsnCode: product.hsnCode,
+      mrp,
       productCode: product.code,
       productId: product.id,
       unit: product.unit,
-      unitPrice: getTradingRateValue(tradingRate, form.partyTypeName),
+      unitPrice: getDiscountedRate(mrp, customerDiscountPercent),
     })
   }
 
@@ -750,7 +847,11 @@ export function CreatePI({
       ...form,
       partyTypeCode,
       partyTypeName,
-      lineItems: applyPartyTypeRates(form.lineItems, partyTypeName),
+      lineItems: applyPartyTypeRates(
+        form.lineItems,
+        partyTypeName,
+        selectedCustomerDiscount,
+      ),
     })
   }
 
@@ -792,6 +893,7 @@ export function CreatePI({
       savedForm.customerId,
     customerId: selectedMasterCustomer?.customerId ?? null,
     gstNo: savedForm.prospectiveGstNo,
+    grandTotal: commercial.grandTotal,
     igstAmount: commercial.igstAmount,
     lineItems: savedForm.lineItems.map((line, index) => {
       const lineSummary = lineCalculations[index]
@@ -825,11 +927,25 @@ export function CreatePI({
   })
 
   const saveDraft = async () => {
-    const savedForm: PIFormState = {
+    const savedForm = {
       ...form,
+      additionalDiscountAmount: commercial.additionalDiscountAmount,
+      amountAfterDiscount: commercial.amountAfterDiscount,
+      basicValue: commercial.basicValue,
+      buyNFlyAmount: commercial.buyNFlyAmount,
+      cdAmount: commercial.cdAmount,
+      cgstAmount: commercial.cgstAmount,
       discount: commercial.schemeDiscount,
+      grandTotal: commercial.grandTotal,
+      igstAmount: commercial.igstAmount,
+      netBasicValue: commercial.netBasicValue,
+      netTaxableValue: commercial.netTaxableValue,
+      otherDiscountAmount: commercial.otherDiscountAmount,
       roundOff: commercial.roundOff,
       schemeDiscount: commercial.schemeDiscount,
+      sgstAmount: commercial.sgstAmount,
+      specialDiscountAmount: commercial.specialDiscountAmount,
+      todAmount: commercial.todAmount,
     }
 
     setIsSavingPI(true)
@@ -1270,44 +1386,57 @@ export function CreatePI({
                 <tbody>
                   {form.lineItems.map((line, index) => {
                     const lineSummary = lineCalculations[index]
+                    const selectedProductOptionValue =
+                      productRows.find(
+                        (product) =>
+                          product.id === line.productId ||
+                          product.code === line.productCode,
+                      )?.id ||
+                      line.productId ||
+                      line.productCode
 
                     return (
                       <tr key={line.id}>
                         <td>{index + 1}</td>
                         <td>
-                          <select
+                          <input
                             className="table-control product-code-control"
+                            readOnly
+                            title="Loaded from selected product description"
+                            value={line.productCode}
+                          />
+                        </td>
+                        <td>
+                          <select
+                            className="table-control description-control"
                             onChange={(event) =>
                               selectProduct(line.id, event.target.value)
                             }
-                            value={line.productCode}
+                            value={selectedProductOptionValue}
                           >
-                            <option value="">Select product</option>
-                            {productRows.map((product) => (
-                              <option key={product.id} value={product.code}>
-                                {product.code}
-                              </option>
-                            ))}
+                            <option value="">Select product description</option>
+                            {[...productRows]
+                              .sort((firstProduct, secondProduct) =>
+                                (firstProduct.description || firstProduct.code)
+                                  .localeCompare(
+                                    secondProduct.description ||
+                                      secondProduct.code,
+                                  ),
+                              )
+                              .map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.description || product.code}
+                                </option>
+                              ))}
                             {line.productCode &&
                             !productRows.some(
                               (product) => product.code === line.productCode,
                             ) ? (
                               <option value={line.productCode}>
-                                {line.productCode}
+                                {line.description || line.productCode}
                               </option>
                             ) : null}
                           </select>
-                        </td>
-                        <td>
-                          <input
-                            className="table-control description-control"
-                            onChange={(event) =>
-                              updateLineItem(line.id, {
-                                description: event.target.value,
-                              })
-                            }
-                            value={line.description}
-                          />
                         </td>
                         <td>
                           <input
@@ -1348,9 +1477,10 @@ export function CreatePI({
                             className="table-control number-control"
                             min="0"
                             onChange={(event) =>
-                              updateLineItem(line.id, {
-                                discountPercent: parseNumber(event.target.value),
-                              })
+                              handleLineDiscountChange(
+                                line.id,
+                                event.target.value,
+                              )
                             }
                             type="number"
                             value={line.discountPercent || ''}
@@ -1379,6 +1509,15 @@ export function CreatePI({
           </div>
         ) : null}
       </section>
+
+      <div className="create-pi-print-preview">
+        <PIPreviewPanel
+          company={selectedCompany}
+          customer={selectedCustomer}
+          form={previewForm}
+          mode="full"
+        />
+      </div>
 
       {selectedCompany || selectedCustomer ? (
         <section className="panel customer-mini-card">

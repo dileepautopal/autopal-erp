@@ -1,8 +1,8 @@
-import { navItems } from '../../data/mockData'
-import type { ScreenId, WithChildren } from '../../types'
+import type { NavItem, ScreenId, WithChildren } from '../../types'
 
 type AppShellProps = WithChildren & {
   activeScreen: ScreenId
+  navItems: NavItem[]
   onNavigate: (screen: ScreenId) => void
   onLogout: () => void
   userName: string
@@ -11,6 +11,7 @@ type AppShellProps = WithChildren & {
 export function AppShell({
   activeScreen,
   children,
+  navItems,
   onNavigate,
   onLogout,
   userName,

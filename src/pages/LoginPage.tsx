@@ -2,9 +2,10 @@ import { useState, type FormEvent } from 'react'
 import { Button } from '../components/ui/Button'
 import { InputField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
+import type { ScreenId, UserSession } from '../types'
 
 type LoginPageProps = {
-  onLogin: (userName: string) => void
+  onLogin: (session: UserSession) => void
 }
 
 type LoginMode = 'login' | 'change-password'
@@ -12,6 +13,136 @@ type MessageTone = 'error' | 'success'
 
 const LOGIN_API_URL = apiUrl('/api/login')
 const CHANGE_PASSWORD_API_URL = apiUrl('/api/change-password')
+
+type LoginLocation = {
+  latitude?: number
+  longitude?: number
+  locationText: string
+}
+
+type IPLocationProvider = {
+  mapLocation: (body: Record<string, unknown>) => LoginLocation | null
+  url: string
+}
+
+const getMapsUrl = (latitude: number, longitude: number) =>
+  `https://www.google.com/maps?q=${latitude},${longitude}`
+
+const getLocationFromCoordinates = (
+  latitudeValue: unknown,
+  longitudeValue: unknown,
+) => {
+  const latitude = Number(latitudeValue)
+  const longitude = Number(longitudeValue)
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null
+  }
+
+  return {
+    latitude,
+    locationText: getMapsUrl(latitude, longitude),
+    longitude,
+  }
+}
+
+const getTimezoneLocation = (): LoginLocation => ({
+  locationText: Intl.DateTimeFormat().resolvedOptions().timeZone,
+})
+
+const getGrantedBrowserLocation = () =>
+  new Promise<LoginLocation | null>((resolve) => {
+    if (!navigator.geolocation || !navigator.permissions) {
+      resolve(null)
+      return
+    }
+
+    navigator.permissions
+      .query({ name: 'geolocation' })
+      .then((permissionStatus) => {
+        if (permissionStatus.state !== 'granted') {
+          resolve(null)
+          return
+        }
+
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const latitude = position.coords.latitude
+            const longitude = position.coords.longitude
+
+            resolve({
+              latitude,
+              locationText: getMapsUrl(latitude, longitude),
+              longitude,
+            })
+          },
+          () => resolve(null),
+          {
+            enableHighAccuracy: false,
+            maximumAge: 10 * 60 * 1000,
+            timeout: 2500,
+          },
+        )
+      })
+      .catch(() => resolve(null))
+  })
+
+const ipLocationProviders: IPLocationProvider[] = [
+  {
+    mapLocation: (body) =>
+      getLocationFromCoordinates(body.latitude, body.longitude),
+    url: 'https://ipapi.co/json/',
+  },
+  {
+    mapLocation: (body) =>
+      body.success === false
+        ? null
+        : getLocationFromCoordinates(body.latitude, body.longitude),
+    url: 'https://ipwho.is/',
+  },
+  {
+    mapLocation: (body) =>
+      getLocationFromCoordinates(body.latitude, body.longitude),
+    url: 'https://get.geojs.io/v1/ip/geo.json',
+  },
+]
+
+const fetchLocationJSON = async (url: string) => {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 2500)
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    return (await response.json()) as Record<string, unknown>
+  } catch {
+    return null
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
+const getBrowserIPLocation = async () => {
+  const locations = await Promise.all(
+    ipLocationProviders.map(async (provider) => {
+      const body = await fetchLocationJSON(provider.url)
+      return body ? provider.mapLocation(body) : null
+    }),
+  )
+
+  return locations.find(Boolean) ?? null
+}
+
+const getLoginLocation = async (): Promise<LoginLocation> =>
+  (await getGrantedBrowserLocation()) ??
+  (await getBrowserIPLocation()) ??
+  getTimezoneLocation()
 
 const getApiErrorMessage = async (
   response: Response,
@@ -65,8 +196,10 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setIsSubmitting(true)
 
     try {
+      const location = await getLoginLocation()
       const response = await fetch(LOGIN_API_URL, {
         body: JSON.stringify({
+          location,
           pw,
           userName,
         }),
@@ -82,6 +215,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
       const result = (await response.json()) as {
         authorized?: boolean
+        isAdmin?: boolean
+        rights?: ScreenId[]
         userName?: string
       }
 
@@ -89,7 +224,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         throw new Error('You are not authorised person.')
       }
 
-      onLogin(result.userName || userName)
+      onLogin({
+        isAdmin: Boolean(result.isAdmin),
+        rights: Array.isArray(result.rights) ? result.rights : [],
+        userName: result.userName || userName,
+      })
     } catch (error) {
       showMessage(
         error instanceof Error

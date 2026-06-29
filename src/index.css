@@ -30,6 +30,7 @@ body {
   margin: 0;
   min-width: 320px;
   overflow-x: hidden;
+  width: 100%;
 }
 
 button,
@@ -53,16 +54,22 @@ table {
   width: 100%;
 }
 
+html,
+body,
 #root {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
 }
 
 .app-shell {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   min-width: 0;
   overflow-x: hidden;
+  width: 100%;
 }
 
 .sidebar {
@@ -73,7 +80,9 @@ table {
   display: flex;
   flex-direction: column;
   gap: 28px;
+  min-height: 0;
   min-width: 0;
+  overflow-y: auto;
   padding: 24px;
 }
 
@@ -118,7 +127,9 @@ table {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
   min-width: 0;
+  overflow-y: auto;
   scrollbar-width: none;
 }
 
@@ -165,6 +176,7 @@ table {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 8px;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
   padding: 12px;
@@ -232,9 +244,12 @@ table {
 }
 
 .content-shell {
-  overflow-x: hidden;
+  max-width: 100%;
+  min-height: 0;
   min-width: 0;
+  overflow: auto;
   padding: 28px;
+  width: 100%;
 }
 
 .login-page {
@@ -313,9 +328,11 @@ table {
   display: flex;
   flex-direction: column;
   gap: 22px;
-  margin: 0 auto;
-  max-width: 1480px;
+  margin: 0;
+  max-width: none;
+  min-height: 0;
   min-width: 0;
+  width: 100%;
 }
 
 .page-header {
@@ -455,6 +472,283 @@ table {
 .metric-card p {
   color: var(--muted);
   margin: 8px 0 0;
+}
+
+.dashboard-tab-list {
+  align-items: center;
+  background: #fff7e8;
+  border: 1px solid #f0d5a3;
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 0;
+  justify-self: start;
+  overflow: hidden;
+}
+
+.dashboard-tab-list button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  min-height: 38px;
+  padding: 0 16px;
+}
+
+.dashboard-tab-list button + button {
+  border-left: 1px solid #f0d5a3;
+}
+
+.dashboard-tab-list button.active {
+  background: var(--autopal-red);
+  color: #fff;
+}
+
+.dashboard-tab-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-chart-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-chart-card {
+  min-width: 0;
+}
+
+.dashboard-chart-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.dashboard-chart-head h2 {
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.chart-mode-control {
+  background: #fff7e8;
+  border: 1px solid #f0d5a3;
+  border-radius: 8px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.chart-mode-control button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.chart-mode-control button + button {
+  border-left: 1px solid #f0d5a3;
+}
+
+.chart-mode-control button.active {
+  background: var(--autopal-red);
+  color: #fff;
+}
+
+.dashboard-bars {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-bar-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dashboard-bar-meta {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.dashboard-bar-meta span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-bar-meta strong {
+  color: var(--autopal-red-dark);
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.dashboard-bar-track {
+  background: #f4e7dd;
+  border-radius: 999px;
+  display: block;
+  height: 12px;
+  overflow: hidden;
+}
+
+.dashboard-bar-fill {
+  background: linear-gradient(90deg, var(--autopal-red), var(--autopal-saffron));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.dashboard-column-chart {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(34px, 1fr));
+  min-height: 190px;
+}
+
+.dashboard-column-item {
+  align-items: stretch;
+  display: grid;
+  gap: 6px;
+  grid-template-rows: 18px 126px 32px;
+  min-width: 0;
+}
+
+.dashboard-column-item strong {
+  color: var(--autopal-red-dark);
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dashboard-column-track {
+  align-items: end;
+  background: #f4e7dd;
+  border-radius: 8px 8px 4px 4px;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0 4px;
+}
+
+.dashboard-column-fill {
+  border-radius: 7px 7px 0 0;
+  display: block;
+  min-height: 7px;
+  width: 100%;
+}
+
+.dashboard-column-item span {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-line-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.dashboard-line-chart {
+  background: linear-gradient(180deg, #fffaf2, #fff);
+  border: 1px solid #f0d5a3;
+  border-radius: 8px;
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.dashboard-line-axis {
+  stroke: #e7c89d;
+  stroke-width: 1;
+}
+
+.dashboard-line-path {
+  fill: none;
+  stroke: var(--autopal-red);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.dashboard-line-point {
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.dashboard-pie-wrap {
+  align-items: center;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 128px minmax(0, 1fr);
+}
+
+.dashboard-pie-chart {
+  display: block;
+  height: 128px;
+  width: 128px;
+}
+
+.dashboard-chart-legend {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.dashboard-chart-legend.compact {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.dashboard-chart-legend span {
+  align-items: center;
+  color: var(--ink);
+  display: flex;
+  font-size: 11px;
+  font-weight: 800;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dashboard-chart-legend span > b {
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 9px;
+  width: 9px;
+}
+
+.dashboard-chart-legend span > strong {
+  color: var(--autopal-red-dark);
+  font-size: 11px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.dashboard-chart-empty {
+  color: var(--muted);
+  margin: 0;
 }
 
 .accent-red {
@@ -652,7 +946,10 @@ table {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+  max-width: 100%;
+  min-width: 0;
   padding: 20px;
+  width: 100%;
 }
 
 .section-heading {
@@ -762,7 +1059,20 @@ table {
 
 .line-table-wrap,
 .responsive-table {
-  overflow-x: auto;
+  max-height: min(62vh, 720px);
+  min-width: 0;
+  overflow: auto;
+}
+
+.line-table-wrap thead th,
+.responsive-table thead th,
+.pi-data-grid-wrap thead th {
+  background:
+    linear-gradient(90deg, rgba(181, 18, 27, 0.08), rgba(245, 158, 11, 0.12)),
+    #fffaf2;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .line-table {
@@ -853,6 +1163,13 @@ table {
   border-radius: 8px;
   box-shadow: 0 20px 50px rgba(55, 28, 16, 0.13);
   overflow: hidden;
+}
+
+.a4-invoice-sheet {
+  box-sizing: border-box;
+  height: 297mm;
+  min-height: 297mm;
+  width: 210mm;
 }
 
 .excel-invoice {
@@ -1287,11 +1604,81 @@ table {
 }
 
 .product-master-table {
-  min-width: 1180px;
+  min-width: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.product-master-table th,
+.product-master-table td {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.product-master-table .table-actions {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.product-master-table .table-actions .btn {
+  width: 100%;
 }
 
 .customer-master-table {
-  min-width: 1280px;
+  min-width: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.customer-master-table th,
+.customer-master-table td {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.customer-master-table .table-actions {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.customer-master-table .table-actions .btn {
+  width: 100%;
+}
+
+.resizable-column-header {
+  padding-right: 18px;
+}
+
+.column-resize-handle {
+  background: transparent;
+  border: 0;
+  bottom: 0;
+  cursor: col-resize;
+  padding: 0;
+  position: absolute;
+  right: -4px;
+  top: 0;
+  touch-action: none;
+  width: 8px;
+  z-index: 3;
+}
+
+.column-resize-handle::after {
+  background: rgba(181, 18, 27, 0.22);
+  border-radius: 999px;
+  bottom: 8px;
+  content: "";
+  opacity: 0;
+  position: absolute;
+  right: 3px;
+  top: 8px;
+  transition: opacity 140ms ease;
+  width: 2px;
+}
+
+.column-resize-handle:hover::after,
+.column-resize-handle:focus-visible::after {
+  opacity: 1;
 }
 
 .customer-edit-panel {
@@ -1568,6 +1955,185 @@ table {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(260px, 1fr) 220px;
+}
+
+.whatsapp-status-strip strong {
+  font-size: 21px;
+}
+
+.admin-user-layout {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.35fr);
+}
+
+.admin-user-form,
+.admin-user-layout > .panel {
+  min-width: 0;
+}
+
+.admin-user-fields {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-switch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.admin-switch-row label,
+.admin-rights-grid label {
+  align-items: center;
+  color: var(--ink);
+  display: flex;
+  font-weight: 800;
+  gap: 9px;
+}
+
+.admin-rights-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin: 16px 0 10px;
+}
+
+.admin-rights-head strong {
+  color: var(--ink);
+}
+
+.admin-rights-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-rights-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-rights-grid label {
+  align-items: flex-start;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.admin-rights-grid small,
+.admin-user-table small {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 3px;
+}
+
+.admin-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.admin-user-table {
+  min-width: 920px;
+}
+
+.whatsapp-webhook-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.webhook-url-box {
+  background: #fff7e7;
+  border: 1px solid #efd5a3;
+  border-radius: 8px;
+  color: var(--autopal-red-dark);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  padding: 12px 14px;
+}
+
+.whatsapp-import-layout {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+}
+
+.whatsapp-compose-panel,
+.whatsapp-result-panel {
+  min-width: 0;
+}
+
+.whatsapp-message-input {
+  min-height: 280px;
+}
+
+.whatsapp-result-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.whatsapp-detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.whatsapp-detail-grid > div,
+.whatsapp-created-pi > div {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.whatsapp-detail-grid span,
+.whatsapp-created-pi span {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.whatsapp-detail-grid strong,
+.whatsapp-created-pi strong {
+  color: var(--ink);
+  display: block;
+  font-size: 18px;
+  line-height: 1.25;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.whatsapp-created-pi {
+  align-items: stretch;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+.whatsapp-created-pi p {
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.whatsapp-item-table {
+  min-width: 620px;
+}
+
+.whatsapp-empty-state {
+  min-height: 220px;
 }
 
 .customer-discount-select {
@@ -1874,10 +2440,14 @@ table {
 @media (max-width: 940px) {
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    min-height: 100vh;
   }
 
   .sidebar {
     gap: 18px;
+    min-height: auto;
+    overflow: visible;
     padding: 18px;
     position: static;
     width: 100%;
@@ -1902,6 +2472,7 @@ table {
   }
 
   .content-shell {
+    overflow: visible;
     padding: 20px;
   }
 
@@ -1915,6 +2486,7 @@ table {
 
   .summary-strip,
   .dashboard-grid,
+  .dashboard-chart-grid,
   .two-columns,
   .prospective-grid,
   .customer-master-controls,
@@ -1923,6 +2495,12 @@ table {
   .rate-master-controls,
   .pi-list-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .whatsapp-import-layout,
+  .admin-user-layout,
+  .whatsapp-created-pi {
+    grid-template-columns: 1fr;
   }
 
   .prospective-grid .field:nth-child(2) {
@@ -1954,6 +2532,11 @@ table {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .admin-user-fields,
+  .admin-rights-grid {
+    grid-template-columns: 1fr;
+  }
+
   .discount-field-customer,
   .discount-field-date,
   .discount-field-cust-code,
@@ -1979,6 +2562,7 @@ table {
 
   .summary-strip,
   .dashboard-grid,
+  .dashboard-chart-grid,
   .two-columns,
   .create-pi-header-grid,
   .prospective-grid,
@@ -1990,6 +2574,7 @@ table {
   .product-master-controls,
   .rate-master-controls,
   .pi-list-controls,
+  .whatsapp-detail-grid,
   .invoice-meta-grid,
   .invoice-terms-grid,
   .invoice-tax-grid,
@@ -2003,6 +2588,16 @@ table {
   .rate-master-controls .field:first-child,
   .pi-list-controls .field:first-child {
     grid-column: auto;
+  }
+
+  .dashboard-tab-list {
+    display: flex;
+    width: 100%;
+  }
+
+  .dashboard-tab-list button {
+    flex: 1 1 0;
+    padding: 0 10px;
   }
 
   .prospective-grid .field:nth-child(2) {
@@ -2151,6 +2746,10 @@ table {
     max-width: none;
   }
 
+  .create-pi-page > :not(.create-pi-print-preview) {
+    display: none !important;
+  }
+
   .preview-panel {
     display: block;
     position: static;
@@ -2200,5 +2799,661 @@ table {
 
   .excel-pi-table {
     page-break-inside: avoid;
+  }
+}
+
+.ail-pi-sheet {
+  background: #fff;
+  border: 1px solid #f36b00;
+  border-radius: 0;
+  box-shadow: 0 18px 44px rgba(48, 20, 8, 0.16);
+  color: #090909;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 8pt;
+  height: 297mm;
+  line-height: 1.18;
+  overflow: hidden;
+  padding: 5mm 4.5mm 4.5mm;
+  position: relative;
+  print-color-adjust: exact;
+  width: 210mm;
+  -webkit-print-color-adjust: exact;
+}
+
+.ail-pi-sheet::before {
+  display: none;
+}
+
+.ail-orange-ribbon {
+  background: #ff6a00;
+  height: 3.6mm;
+  left: 0;
+  position: absolute;
+  right: 0;
+  z-index: 0;
+}
+
+.ail-orange-ribbon-top {
+  border-bottom-left-radius: 58% 100%;
+  top: 0;
+}
+
+.ail-orange-ribbon-bottom {
+  border-top-right-radius: 58% 100%;
+  bottom: 0;
+}
+
+.ail-pi-header,
+.ail-party-grid,
+.ail-products-table,
+.ail-lower-grid,
+.ail-signature-grid,
+.ail-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.ail-pi-header {
+  display: grid;
+  gap: 2.6mm;
+  grid-template-columns: 37mm minmax(0, 1fr) 58mm;
+  min-height: 37mm;
+}
+
+.ail-logo-panel {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-top: 0.6mm;
+  text-align: center;
+}
+
+.ail-logo-image {
+  display: block;
+  height: 18mm;
+  object-fit: contain;
+  width: 34mm;
+}
+
+.ail-company-head {
+  min-width: 0;
+  padding-top: 3.4mm;
+  text-align: center;
+}
+
+.ail-company-head h1 {
+  color: #d10000;
+  font-size: 21pt;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  margin: 0 0 2.2mm;
+  white-space: nowrap;
+}
+
+.ail-company-head h2 {
+  color: #111;
+  font-size: 12.8pt;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+  line-height: 1.05;
+  margin: 0 0 2mm;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ail-company-head p {
+  font-size: 8.7pt;
+  margin: 0 0 1.35mm;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ail-company-ids {
+  align-items: center;
+  display: flex;
+  gap: 3mm;
+  justify-content: center;
+  margin-top: 2.2mm !important;
+  white-space: nowrap;
+}
+
+.ail-company-ids b {
+  color: #d00000;
+}
+
+.ail-pi-details {
+  border: 1px solid #ff2b1f;
+  border-radius: 8px;
+  align-self: start;
+  font-size: 7.25pt;
+  margin-top: 0.4mm;
+  overflow: hidden;
+}
+
+.ail-pi-details h3,
+.ail-box h3 {
+  background: linear-gradient(180deg, #e40000, #b80000);
+  color: #fff;
+  font-size: 8.7pt;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0;
+  padding: 1.35mm 2.3mm;
+  text-transform: uppercase;
+}
+
+.ail-pi-details h3 {
+  text-align: center;
+}
+
+.ail-pi-details dl,
+.ail-dispatch-content dl,
+.ail-bank-box dl {
+  margin: 0;
+}
+
+.ail-pi-details dl {
+  display: grid;
+  gap: 0.95mm;
+  padding: 1.8mm 1.9mm 2mm;
+}
+
+.ail-pi-details div,
+.ail-dispatch-content div,
+.ail-bank-box div {
+  column-gap: 2mm;
+  display: grid;
+  grid-template-columns: var(--ail-label-width, 20mm) minmax(0, 1fr);
+}
+
+.ail-pi-details dt,
+.ail-dispatch-content dt,
+.ail-bank-box dt {
+  display: flex;
+  font-weight: 800;
+  grid-column: 1;
+  justify-content: space-between;
+  min-width: 0;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.ail-pi-details dt::after,
+.ail-dispatch-content dt::after,
+.ail-bank-box dt::after {
+  content: ":";
+  margin-left: 2mm;
+}
+
+.ail-pi-details dd,
+.ail-dispatch-content dd,
+.ail-bank-box dd {
+  font-weight: 800;
+  grid-column: 2;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.ail-party-grid {
+  display: grid;
+  gap: 1mm;
+  grid-template-columns: 70mm 1fr;
+  margin-top: 2.2mm;
+}
+
+.ail-box {
+  border: 1px solid #ff2b1f;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.ail-box-content {
+  min-height: 34mm;
+  padding: 3mm;
+}
+
+.ail-box-content h4 {
+  font-size: 10.3pt;
+  margin: 0 0 2.3mm;
+}
+
+.ail-box-content p {
+  font-size: 8.5pt;
+  line-height: 1.38;
+  margin: 0 0 1.7mm;
+}
+
+.ail-dispatch-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  min-height: 34mm;
+}
+
+.ail-dispatch-content dl {
+  display: grid;
+  gap: 1.55mm;
+  padding: 2.8mm 3mm;
+}
+
+.ail-dispatch-content dl:first-child div {
+  --ail-label-width: 31mm;
+}
+
+.ail-dispatch-content dl:last-child div {
+  --ail-label-width: 25mm;
+}
+
+.ail-dispatch-content dl + dl {
+  border-left: 1px solid #ff2b1f;
+}
+
+.ail-dispatch-content dd:empty::after {
+  border-bottom: 1px solid #777;
+  content: "";
+  display: block;
+  height: 1.1em;
+  width: 100%;
+}
+
+.ail-products-table {
+  border: 1px solid #9e8d8d;
+  border-collapse: collapse;
+  font-size: 8.1pt;
+  margin-top: 3mm;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.ail-products-table th {
+  background: linear-gradient(180deg, #e40000, #b80000);
+  border: 1px solid #d65c5c;
+  color: #fff;
+  font-size: 7.7pt;
+  font-weight: 900;
+  height: 5.8mm;
+  padding: 0.9mm 1mm;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.ail-products-table td {
+  border: 1px solid #b9a5a5;
+  height: 6.4mm;
+  padding: 0.8mm 1.4mm;
+  vertical-align: middle;
+}
+
+.ail-products-table th:nth-child(1),
+.ail-products-table td:nth-child(1) {
+  text-align: center;
+  width: 10mm;
+}
+
+.ail-products-table th:nth-child(2),
+.ail-products-table td:nth-child(2) {
+  text-align: center;
+  width: 24mm;
+}
+
+.ail-products-table th:nth-child(3),
+.ail-products-table td:nth-child(3) {
+  width: 64mm;
+}
+
+.ail-products-table th:nth-child(4),
+.ail-products-table td:nth-child(4) {
+  text-align: center;
+  width: 19mm;
+}
+
+.ail-products-table th:nth-child(5),
+.ail-products-table td:nth-child(5) {
+  text-align: right;
+  width: 14mm;
+}
+
+.ail-products-table th:nth-child(6),
+.ail-products-table td:nth-child(6) {
+  text-align: center;
+  width: 13mm;
+}
+
+.ail-products-table th:nth-child(7),
+.ail-products-table td:nth-child(7) {
+  text-align: right;
+  width: 20mm;
+}
+
+.ail-products-table th:nth-child(8),
+.ail-products-table td:nth-child(8) {
+  text-align: right;
+  width: 22mm;
+}
+
+.ail-total-qty-row td {
+  border-left-color: transparent;
+  border-right-color: transparent;
+  font-weight: 800;
+  height: 5.5mm;
+  padding: 0;
+  text-align: left;
+}
+
+.ail-total-qty-line {
+  align-items: center;
+  display: grid;
+  grid-template-columns: 82mm max-content minmax(0, 1fr);
+  min-height: 5.5mm;
+  width: 100%;
+}
+
+.ail-total-qty-row .ail-tax-note-cell {
+  font-size: 7.2pt;
+  padding-left: 0.2mm;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ail-total-qty-group {
+  align-items: center;
+  display: grid;
+  gap: 5mm;
+  grid-template-columns: max-content 18mm;
+  white-space: nowrap;
+}
+
+.ail-total-qty-row .ail-total-label {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ail-total-value {
+  text-align: right;
+}
+
+.ail-lower-grid {
+  align-items: stretch;
+  display: grid;
+  gap: 2.4mm;
+  grid-template-columns: 60mm 61mm 1fr;
+  margin-top: 1.8mm;
+}
+
+.ail-left-stack {
+  display: grid;
+  grid-template-rows: 22mm 1fr;
+}
+
+.ail-words-box,
+.ail-terms-box,
+.ail-bank-box {
+  min-height: 0;
+}
+
+.ail-words-box {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.ail-terms-box {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.ail-words-box p {
+  font-size: 8.6pt;
+  line-height: 1.55;
+  margin: 0;
+  padding: 3.2mm 3mm;
+}
+
+.ail-terms-box ol {
+  font-size: 6.3pt;
+  line-height: 1.5;
+  margin: 0;
+  padding: 2.6mm 2.6mm 2.5mm 4.8mm;
+}
+
+.ail-bank-box dl {
+  display: grid;
+  gap: 3.2mm;
+  padding: 5.5mm 3mm 2.5mm;
+}
+
+.ail-bank-box dd {
+  font-weight: 700;
+}
+
+.ail-bank-box .ail-bank-account-row {
+  display: grid;
+  gap: 1mm;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 13.5mm;
+}
+
+.ail-bank-box .ail-bank-account-row dt,
+.ail-bank-box .ail-bank-account-row dd {
+  grid-column: 1;
+}
+
+.ail-bank-box .ail-bank-account-row dt {
+  justify-content: flex-start;
+}
+
+.ail-bank-box .ail-bank-account-row dt::after {
+  margin-left: 1mm;
+}
+
+.ail-bank-box .ail-bank-account-name {
+  line-height: 1.28;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  padding-left: 3mm;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: normal;
+}
+
+.ail-bank-box .ail-bank-account-number-row {
+  min-height: 6mm;
+  padding-top: 1.2mm;
+}
+
+.ail-summary-box {
+  border: 1px solid #b9a5a5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ail-summary-box table {
+  border-collapse: collapse;
+  font-size: 7.25pt;
+  line-height: 1.16;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.ail-summary-box td {
+  padding: 0.44mm 2.8mm;
+}
+
+.ail-summary-box td:first-child {
+  font-weight: 800;
+}
+
+.ail-summary-box td:last-child {
+  font-weight: 800;
+  text-align: right;
+}
+
+.ail-summary-box .ail-strong-row td {
+  font-weight: 900;
+}
+
+.ail-summary-break-row td {
+  border-top: 1px solid #b9a5a5;
+  padding-top: 1mm;
+}
+
+.ail-grand-total-row td {
+  background: linear-gradient(180deg, #e40000, #b80000);
+  color: #fff;
+  font-size: 9.2pt;
+  font-weight: 900 !important;
+  padding-bottom: 1.15mm;
+  padding-top: 1.15mm;
+}
+
+.ail-signature-grid {
+  background: #fff;
+  border: 1px solid #9e8d8d;
+  border-radius: 5px;
+  bottom: 22mm;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.12fr;
+  height: 17mm;
+  left: 4.5mm;
+  margin: 0;
+  overflow: hidden;
+  position: absolute;
+  right: 4.5mm;
+  z-index: 3;
+}
+
+.ail-signature-grid > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2.2mm 4mm;
+}
+
+.ail-signature-grid > div + div {
+  border-left: 1px solid #9e8d8d;
+}
+
+.ail-signature-grid strong {
+  font-size: 8pt;
+  text-transform: uppercase;
+}
+
+.ail-signature-grid span {
+  border-bottom: 1px solid #777;
+  display: block;
+  width: 28mm;
+}
+
+.ail-signature-grid b {
+  align-self: center;
+  font-size: 7.2pt;
+}
+
+.ail-footer {
+  background: #fff;
+  bottom: 2mm;
+  left: 4.5mm;
+  margin: 0;
+  padding: 0 3mm 1mm;
+  position: absolute;
+  right: 4.5mm;
+  z-index: 3;
+}
+
+.ail-footer-contact-row {
+  align-items: center;
+  border-bottom: 1px solid #f04b3d;
+  display: flex;
+  font-size: 7.7pt;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 6.2mm;
+  padding: 0.8mm 0 1.1mm;
+  white-space: nowrap;
+}
+
+.ail-footer-contact-item {
+  align-items: center;
+  display: inline-flex;
+  gap: 1.5mm;
+}
+
+.ail-footer-contact-item strong {
+  font-weight: 900;
+}
+
+.ail-footer-contact-separator {
+  background: #e40000;
+  display: inline-block;
+  height: 3.5mm;
+  margin: 0 10mm;
+  width: 0.35mm;
+}
+
+.ail-footer-icon {
+  fill: #e40000;
+  flex: 0 0 auto;
+  height: 3.6mm;
+  width: 3.6mm;
+}
+
+.ail-footer-product-row {
+  align-items: center;
+  display: flex;
+  font-size: 7.5pt;
+  font-weight: 900;
+  justify-content: space-between;
+  list-style: none;
+  margin: 1.25mm 0 0;
+  padding: 0 9mm;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ail-footer-product-row li {
+  align-items: center;
+  display: inline-flex;
+  gap: 7mm;
+}
+
+.ail-footer-product-row li + li::before {
+  color: #d00000;
+  content: "\2022";
+  font-size: 10pt;
+  line-height: 1;
+}
+
+@media print {
+  .ail-pi-sheet {
+    border: 1px solid #f36b00;
+    box-shadow: none;
+    height: 297mm;
+    padding: 5mm 4.5mm 4.5mm;
+    width: 210mm;
+  }
+
+  .a4-preview-frame {
+    align-items: flex-start;
+  }
+}
+
+.create-pi-print-preview {
+  display: none;
+}
+
+@media print {
+  .create-pi-print-preview {
+    display: block;
+    margin: 0;
   }
 }

@@ -2,14 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { InputField, SelectField } from '../components/ui/Field'
 import {
+  companies as mockCompanies,
   products as mockProducts,
   tradingProductRates as mockTradingProductRates,
 } from '../data/mockData'
 import { apiUrl } from '../config/api'
-import type { FieldOption, Product, TradingProductRate } from '../types'
+import type { Company, FieldOption, Product, TradingProductRate } from '../types'
 import { formatCurrency, parseNumber } from '../utils/calculations'
 
 const ALL_FILTER_VALUE = 'all'
+const COMPANY_API_URL = apiUrl('/api/master-companies')
 const PRODUCT_MASTER_API_URL = apiUrl('/api/master-products')
 const TRADING_RATE_API_URL = apiUrl('/api/master-trading-product-rates')
 
@@ -89,6 +91,31 @@ const buildProductDescriptionMap = (products: Product[]) =>
     return descriptionMap
   }, {})
 
+const getCompanyCodeForProductCategory = (
+  category: string,
+  fallbackCompanyCode = 1,
+) => {
+  const normalizedCategory = category.trim().toLowerCase()
+
+  if (normalizedCategory === 'head lamp') {
+    return 2
+  }
+
+  if (normalizedCategory === 'halogen bulbs') {
+    return 1
+  }
+
+  return fallbackCompanyCode
+}
+
+const getPlantNameForCompanyCode = (
+  compCode: number,
+  companies: Company[],
+  fallbackPlantName = '',
+) =>
+  companies.find((company) => company.compCode === compCode)?.id ??
+  fallbackPlantName
+
 const getApiErrorMessage = async (response: Response) => {
   try {
     const body = (await response.json()) as {
@@ -112,6 +139,7 @@ const getApiErrorMessage = async (response: Response) => {
 
 export function RMarketProductRateMaster() {
   const [rates, setRates] = useState<TradingProductRate[]>([])
+  const [companies, setCompanies] = useState<Company[]>(mockCompanies)
   const [productMasterProducts, setProductMasterProducts] =
     useState<Product[]>(mockProducts)
   const [productDescriptionByCode, setProductDescriptionByCode] = useState<
@@ -135,10 +163,26 @@ export function RMarketProductRateMaster() {
 
   useEffect(() => {
     const loadMasterData = async () => {
+      let companiesLoaded = false
       let productDescriptionsLoaded = false
 
       setIsLoading(true)
       setErrorMessage('')
+
+      try {
+        const companyResponse = await fetch(COMPANY_API_URL)
+
+        if (!companyResponse.ok) {
+          throw new Error('Unable to fetch company list')
+        }
+
+        const apiCompanies = (await companyResponse.json()) as Company[]
+
+        setCompanies(Array.isArray(apiCompanies) ? apiCompanies : mockCompanies)
+        companiesLoaded = Array.isArray(apiCompanies) && apiCompanies.length > 0
+      } catch {
+        setCompanies(mockCompanies)
+      }
 
       try {
         const response = await fetch(PRODUCT_MASTER_API_URL)
@@ -167,9 +211,9 @@ export function RMarketProductRateMaster() {
 
         setRates(apiRates)
         setStatusMessage(
-          productDescriptionsLoaded
+          productDescriptionsLoaded && companiesLoaded
             ? `${apiRates.length} R.Market rates loaded`
-            : `${apiRates.length} R.Market rates loaded; mock descriptions`,
+            : `${apiRates.length} R.Market rates loaded; using fallback master data`,
         )
       } catch (error) {
         setRates(mockTradingProductRates)
@@ -273,7 +317,7 @@ export function RMarketProductRateMaster() {
       minStkQty: 0,
       dispMrp: 0,
       basicRate: 0,
-      plantName: '',
+      plantName: getPlantNameForCompanyCode(1, companies),
       catDesc: '',
       compCode: 1,
     }
@@ -314,17 +358,30 @@ export function RMarketProductRateMaster() {
     )
 
     setRates((currentRates) =>
-      currentRates.map((rate) =>
-        rate.id === rateId
-          ? {
-              ...rate,
-              productCode,
-              catDesc: selectedProduct?.category ?? rate.catDesc,
-              family: selectedProduct?.category ?? rate.family,
-              unitName: selectedProduct?.unit ?? rate.unitName,
-            }
-          : rate,
-      ),
+      currentRates.map((rate) => {
+        if (rate.id !== rateId) {
+          return rate
+        }
+
+        const compCode = selectedProduct
+          ? getCompanyCodeForProductCategory(
+              selectedProduct.category,
+              rate.compCode || 1,
+            )
+          : rate.compCode
+
+        return {
+          ...rate,
+          productCode,
+          catDesc: selectedProduct?.category ?? rate.catDesc,
+          compCode,
+          family: selectedProduct?.category ?? rate.family,
+          plantName: selectedProduct
+            ? getPlantNameForCompanyCode(compCode, companies, rate.plantName)
+            : rate.plantName,
+          unitName: selectedProduct?.unit ?? rate.unitName,
+        }
+      }),
     )
   }
 
@@ -623,9 +680,23 @@ export function RMarketProductRateMaster() {
           {renderTextInput('Unit Name', 'unitName')}
           {renderTextInput('Family', 'family')}
           {renderTextInput('CPNO', 'cpno')}
-          {renderTextInput('Plant Name', 'plantName')}
+          <label className="field">
+            <span className="field-label">Plant Name</span>
+            <input
+              className="field-control"
+              readOnly
+              value={selectedRate.plantName}
+            />
+          </label>
           {renderTextInput('Category Description', 'catDesc', 'text', 'rate-form-span-2')}
-          {renderNumberInput('Company Code', 'compCode', true)}
+          <label className="field">
+            <span className="field-label">Company Code</span>
+            <input
+              className="field-control"
+              readOnly
+              value={selectedRate.compCode}
+            />
+          </label>
           {renderNumberInput('W Rate', 'wRate')}
           {renderNumberInput('SW Rate', 'swRate')}
           {renderNumberInput('R Rate', 'rRate')}

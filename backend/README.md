@@ -107,6 +107,12 @@ Alias:
 GET    /api/r-market-pis
 GET    /api/r-market-pis/:id
 POST   /api/r-market-pis
+
+WhatsApp PI import:
+GET    /api/whatsapp-pi/webhook
+POST   /api/whatsapp-pi/webhook
+POST   /api/whatsapp-pi/parse-text
+POST   /api/whatsapp-pi/import-text
 ```
 
 ## Product JSON Body
@@ -180,11 +186,15 @@ from `/api/master-customer-lookups`. The `zone` field is manual text.
   "minStkQty": 200,
   "dispMrp": 95,
   "basicRate": 52,
-  "plantName": "JPR",
+  "plantName": "autopal-jaipur",
   "catDesc": "H4 Halogen Bulb",
   "compCode": 1
 }
 ```
+
+For R.Market rates, product category drives the company fields. `Head Lamp`
+products use `compCode` 2 and `Halogen Bulbs` products use `compCode` 1.
+`plantName` is stored from `master_company.company_id` for that company code.
 
 ## Customer Discount JSON Body
 
@@ -211,3 +221,79 @@ current PostgreSQL table does not define an auto-increment default.
 Create PI saves a header row to `master_pi_rmkt` and product rows to
 `tran_pi_rmkt` through `POST /api/master-pi-rmkt`. Posting the same `piNumber`
 again updates the header and replaces the product rows.
+
+## WhatsApp PI Import
+
+The WhatsApp module parses order text like:
+
+```text
+Date: 20/06/2026
+M/s Milan Automobiles
+Belgaum
+100/90 - 12V - PU37 - 500 NOS
+130/100 - 12V PU37 - 200 NOS
+130/100 - 24V PU37 - 100 NOS
+```
+
+It creates a regular R.Market PI by matching:
+
+- customer name against `master_customer`
+- item size and voltage against `master_products.description`
+- product rates against `master_trading_product_rate`
+
+Manual parse only:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:5000/api/whatsapp-pi/parse-text `
+  -ContentType 'application/json' `
+  -Body '{"text":"Date: 20/06/2026\nM/s Milan Automobiles\nBelgaum\n100/90 - 12V - PU37 - 500 NOS"}'
+```
+
+Manual parse and insert:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:5000/api/whatsapp-pi/import-text `
+  -ContentType 'application/json' `
+  -Body '{"text":"Date: 20/06/2026\nM/s Milan Automobiles\nBelgaum\n100/90 - 12V - PU37 - 500 NOS"}'
+```
+
+WhatsApp Cloud API webhook:
+
+```text
+Verify URL:  GET  /api/whatsapp-pi/webhook
+Receive URL: POST /api/whatsapp-pi/webhook
+```
+
+Environment variables:
+
+```env
+WHATSAPP_VERIFY_TOKEN=your-webhook-verify-token
+WHATSAPP_ACCESS_TOKEN=your-whatsapp-cloud-api-token
+WHATSAPP_GRAPH_API_BASE=https://graph.facebook.com/v20.0
+
+# Optional defaults
+WHATSAPP_PI_COMP_CODE=1
+WHATSAPP_PI_COMPANY_ID=autopal-jaipur
+WHATSAPP_PI_SERIES=HAL-
+WHATSAPP_PI_IGST_PERCENT=18
+WHATSAPP_PI_DEFAULT_PARTY_TYPE_CODE=1
+WHATSAPP_PI_DEFAULT_ADDRESS=
+WHATSAPP_PI_DEFAULT_CONTACT_NO=
+WHATSAPP_PI_TRANSPORT_MODE=
+WHATSAPP_PI_TRANSPORTER_CODE=0
+WHATSAPP_PI_TRANSPORTER=
+
+# Required only for image messages without a caption.
+# The service should accept { "imageBase64": "...", "mimeType": "image/jpeg" }
+# and return { "text": "..." }.
+WHATSAPP_PI_IMAGE_EXTRACTOR_URL=
+WHATSAPP_PI_IMAGE_EXTRACTOR_TOKEN=
+```
+
+For image messages, the module first uses the WhatsApp image caption. If there
+is no caption, it downloads the image and sends it to `WHATSAPP_PI_IMAGE_EXTRACTOR_URL`
+for OCR/vision extraction.

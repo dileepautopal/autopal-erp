@@ -4,15 +4,29 @@ export type ScreenId =
   | 'dashboard'
   | 'create-pi'
   | 'pi-preview'
+  | 'whatsapp-pi'
   | 'customers'
   | 'products'
   | 'r-market-rates'
   | 'customer-discounts'
+  | 'admin-panel'
 
 export type NavItem = {
   id: ScreenId
   label: string
   meta: string
+}
+
+export type UserSession = {
+  userName: string
+  isAdmin: boolean
+  rights: ScreenId[]
+}
+
+export type UserAccess = UserSession & {
+  isActive: boolean
+  lastLoginAt?: string
+  lastLoginLocation?: string
 }
 
 export type Company = {
@@ -235,6 +249,7 @@ export type LineItem = {
   hsnCode: string
   unit: string
   quantity: number
+  mrp?: number
   unitPrice: number
   gstPercent: number
   discountPercent: number

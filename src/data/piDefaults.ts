@@ -16,6 +16,7 @@ export const createEmptyLineItem = (id: string): LineItem => ({
   hsnCode: '',
   unit: '',
   quantity: 0,
+  mrp: 0,
   unitPrice: 0,
   gstPercent: 0,
   discountPercent: 0,

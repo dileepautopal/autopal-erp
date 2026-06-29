@@ -12,13 +12,32 @@ type PIPreviewPanelProps = {
   mode?: 'compact' | 'full'
 }
 
+type PIPreviewForm = PIFormState & {
+  additionalDiscountAmount?: number
+  amountAfterDiscount?: number
+  basicValue?: number
+  buyNFlyAmount?: number
+  cdAmount?: number
+  cgstAmount?: number
+  companyName?: string
+  grandTotal?: number
+  igstAmount?: number
+  netBasicValue?: number
+  netTaxableValue?: number
+  otherDiscountAmount?: number
+  sgstAmount?: number
+  specialDiscountAmount?: number
+  todAmount?: number
+}
+
 type SummaryRow = {
   label: string
+  sectionBreak?: boolean
   value?: number
   strong?: boolean
 }
 
-const numberFormat = new Intl.NumberFormat('en-IN', {
+const moneyFormat = new Intl.NumberFormat('en-IN', {
   maximumFractionDigits: 2,
   minimumFractionDigits: 2,
 })
@@ -28,6 +47,10 @@ const integerFormat = new Intl.NumberFormat('en-IN', {
 })
 
 const formatDate = (value: string) => {
+  if (!value) {
+    return ''
+  }
+
   const date = new Date(`${value}T00:00:00`)
 
   if (Number.isNaN(date.getTime())) {
@@ -36,13 +59,66 @@ const formatDate = (value: string) => {
 
   return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',
-    month: '2-digit',
+    month: 'short',
     year: 'numeric',
-  }).format(date)
+  }).format(date).replace(/ /g, '-')
 }
 
 const amountWords = (value: number) =>
   formatAmountInWords(Math.round(value), 'INR').replace('Indian Rupees', 'Rupees')
+
+const dashForZero = (value?: number) =>
+  !value ? '-' : moneyFormat.format(value)
+
+const percentLabel = (value: number) =>
+  new Intl.NumberFormat('en-IN', {
+    maximumFractionDigits: 2,
+  }).format(value)
+
+const roundSummaryMoney = (value: number) => Math.round(value * 100) / 100
+
+const toSummaryNumber = (value: unknown) => {
+  const number = Number(value ?? 0)
+  return Number.isFinite(number) ? number : 0
+}
+
+const getStateDisplay = (customer?: Customer) =>
+  [customer?.state, customer?.stateCode ? `(${customer.stateCode})` : '']
+    .filter(Boolean)
+    .join(' ')
+
+const getValidUntil = (form: PIFormState) =>
+  form.validUntil || form.deliveryDate || form.piDate
+
+const getTerms = (form: PIFormState) => {
+  if (form.terms.trim()) {
+    return form.terms
+      .split('\n')
+      .map((term) => term.trim())
+      .filter(Boolean)
+  }
+
+  return [
+    'Prices are firm and valid only up to the validity date mentioned above.',
+    'Goods once sold will not be taken back or exchanged.',
+    'No complaint will be entertained after 7 days from the date of delivery.',
+    'Our responsibility ceases when goods are delivered to the party or transporter.',
+    'Interest @ 18% p.a. will be charged on delayed payments.',
+    'Subject to Jaipur Jurisdiction only.',
+    'E. & O.E.',
+  ]
+}
+
+const compactAddressLines = (value = '') =>
+  value
+    .split(',')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+const formatCompanyTitle = (company: Company | undefined, form: PIPreviewForm) =>
+  company?.legalName || form.companyName || company?.name || 'Company pending'
+
+const footerPhoneNumber = '7733850017'
 
 export function PIPreviewPanel({
   company,
@@ -50,11 +126,12 @@ export function PIPreviewPanel({
   form,
   mode = 'compact',
 }: PIPreviewPanelProps) {
+  const previewForm = form as PIPreviewForm
   const calculatedLines = calculateLines(form.lineItems)
   const visibleLines = calculatedLines.filter(
     (line) => line.productCode || line.description,
   )
-  const invoiceSummary = calculateDomesticInvoiceSummary(
+  const calculatedSummary = calculateDomesticInvoiceSummary(
     form.lineItems,
     form.freight,
     company?.stateCode,
@@ -72,17 +149,99 @@ export function PIPreviewPanel({
       todPercent: form.todPercent,
     },
   )
-
+  const storedBasicValue = toSummaryNumber(previewForm.basicValue)
+  const storedNetBasicValue = toSummaryNumber(previewForm.netBasicValue)
+  const storedSpecialDiscount = toSummaryNumber(previewForm.specialDiscountAmount)
+  const storedOtherDiscount = toSummaryNumber(previewForm.otherDiscountAmount)
+  const storedAmountAfterDiscount = roundSummaryMoney(
+    storedNetBasicValue - storedSpecialDiscount - storedOtherDiscount,
+  )
+  const storedNetTaxableValue = toSummaryNumber(previewForm.netTaxableValue)
+  const storedIgst = toSummaryNumber(previewForm.igstAmount)
+  const storedCgst = toSummaryNumber(previewForm.cgstAmount)
+  const storedSgst = toSummaryNumber(previewForm.sgstAmount)
+  const storedFreight = toSummaryNumber(form.freight)
+  const storedRoundOff = toSummaryNumber(form.roundOff)
+  const storedGrandTotal = toSummaryNumber(previewForm.grandTotal)
+  const hasStoredSummary =
+    storedGrandTotal > 0 || storedNetTaxableValue > 0 || storedBasicValue > 0
+  const invoiceSummary = hasStoredSummary
+    ? {
+        ...calculatedSummary,
+        additionalDiscount: toSummaryNumber(previewForm.additionalDiscountAmount),
+        amountAfterDiscount:
+          storedAmountAfterDiscount > 0
+            ? storedAmountAfterDiscount
+            : calculatedSummary.amountAfterDiscount,
+        buyNFlyDiscount: toSummaryNumber(previewForm.buyNFlyAmount),
+        cashDiscount: toSummaryNumber(previewForm.cdAmount),
+        cgst: storedCgst,
+        freight: storedFreight,
+        grandTotal:
+          storedGrandTotal > 0
+            ? storedGrandTotal
+            : roundSummaryMoney(
+                storedNetTaxableValue +
+                  storedIgst +
+                  storedCgst +
+                  storedSgst +
+                  storedFreight +
+                  storedRoundOff,
+              ),
+        igst: storedIgst,
+        isIntraState: storedIgst <= 0 && (storedCgst > 0 || storedSgst > 0),
+        netTaxableValue: storedNetTaxableValue || calculatedSummary.netTaxableValue,
+        netTotal: storedNetBasicValue || calculatedSummary.netTotal,
+        otherDiscount: storedOtherDiscount,
+        roundOff: storedRoundOff,
+        schemeDiscount: toSummaryNumber(form.schemeDiscount),
+        sgst: storedSgst,
+        specialDiscount: storedSpecialDiscount,
+        taxTotal: storedIgst + storedCgst + storedSgst,
+        todDiscount: toSummaryNumber(previewForm.todAmount),
+        total: storedBasicValue || calculatedSummary.total,
+      }
+    : calculatedSummary
+  const productRows = [
+    ...visibleLines,
+    ...Array.from({ length: Math.max(0, 10 - visibleLines.length) }, (_, index) => ({
+      id: `blank-${index}`,
+      productCode: '',
+      description: '',
+      hsnCode: '',
+      quantity: 0,
+      unit: '',
+      unitPrice: 0,
+      taxableAmount: 0,
+    })),
+  ].slice(0, 10)
+  const companyAddressLines = compactAddressLines(company?.address)
+  const terms = getTerms(form)
+  const schemeDiscountPercent = invoiceSummary.total
+    ? (invoiceSummary.schemeDiscount / invoiceSummary.total) * 100
+    : 0
+  const taxRows: SummaryRow[] =
+    invoiceSummary.igst > 0
+      ? [{ label: `IGST @ ${percentLabel(form.igstPercent)}%`, value: invoiceSummary.igst }]
+      : invoiceSummary.cgst > 0 || invoiceSummary.sgst > 0
+        ? [
+            { label: `CGST @ ${percentLabel(form.cgstPercent)}%`, value: invoiceSummary.cgst },
+            { label: `SGST @ ${percentLabel(form.sgstPercent)}%`, value: invoiceSummary.sgst },
+          ]
+        : []
   const summaryRows: SummaryRow[] = [
     { label: 'Total', value: invoiceSummary.total, strong: true },
-    { label: 'Scheme Discount', value: invoiceSummary.schemeDiscount },
+    {
+      label: `Scheme Dis. @ ${percentLabel(schemeDiscountPercent)}%`,
+      value: invoiceSummary.schemeDiscount,
+    },
     { label: 'Net Total', value: invoiceSummary.netTotal, strong: true },
     {
-      label: `Spcl. Dis. @ ${numberFormat.format(form.specialDiscountPercent)}%`,
+      label: `Spcl. Dis. @ ${percentLabel(form.specialDiscountPercent)}%`,
       value: invoiceSummary.specialDiscount,
     },
     {
-      label: `Oth. Dis. @ ${numberFormat.format(form.otherDiscountPercent)}%`,
+      label: `Oth. Dis. @ ${percentLabel(form.otherDiscountPercent)}%`,
       value: invoiceSummary.otherDiscount,
     },
     {
@@ -91,313 +250,317 @@ export function PIPreviewPanel({
       strong: true,
     },
     {
-      label: `TOD Dis. @ ${numberFormat.format(form.todPercent)}%`,
-      value: invoiceSummary.todDiscount,
-    },
-    {
-      label: `Cash Dis. @ ${numberFormat.format(form.cdPercent)}%`,
+      label: `Cash Dis. @ ${percentLabel(form.cdPercent)}%`,
       value: invoiceSummary.cashDiscount,
     },
     {
-      label: `Other Discount @ ${numberFormat.format(
-        form.additionalDiscountPercent,
-      )}%`,
-      value: invoiceSummary.additionalDiscount,
+      label: `TOD @ ${percentLabel(form.todPercent)}%`,
+      value: invoiceSummary.todDiscount,
     },
     {
-      label: `Buy N Fly @ ${numberFormat.format(form.buyNFlyPercent)}%`,
+      label: `Buy & Fly Dis. @ ${percentLabel(form.buyNFlyPercent)}%`,
       value: invoiceSummary.buyNFlyDiscount,
     },
     {
-      label: 'Net Taxable Value',
+      label: 'Taxable Value',
+      sectionBreak: true,
       value: invoiceSummary.netTaxableValue,
       strong: true,
     },
-    { label: `IGST @ ${numberFormat.format(form.igstPercent)}%`, value: invoiceSummary.igst },
-    { label: `CGST @ ${numberFormat.format(form.cgstPercent)}%`, value: invoiceSummary.cgst },
-    { label: `SGST @ ${numberFormat.format(form.sgstPercent)}%`, value: invoiceSummary.sgst },
-    { label: 'TCS @ 0 %', value: invoiceSummary.tcs },
-    { label: 'Freight Amount', value: invoiceSummary.freight },
+    ...taxRows,
+    { label: 'TCS @ 0%', value: invoiceSummary.tcs },
+    { label: 'Freight Amount', sectionBreak: true, value: invoiceSummary.freight },
     { label: 'Other Charges', value: invoiceSummary.otherCharges },
-    { label: 'Round Off', value: invoiceSummary.roundOff },
-    { label: 'Grand Total', value: invoiceSummary.grandTotal, strong: true },
+    { label: 'Round Off (+/-)', value: invoiceSummary.roundOff },
   ]
-
-  const fillerRows = Math.max(2, 8 - visibleLines.length)
 
   return (
     <aside className={`preview-panel ${mode === 'full' ? 'preview-full' : ''}`}>
       <div className="a4-preview-frame">
-        <div className="invoice-paper excel-invoice a4-invoice-sheet">
-          <table className="excel-pi-table">
-            <colgroup>
-              <col className="col-sno" />
-              <col className="col-code" />
-              <col className="col-description" />
-              <col className="col-hsn" />
-              <col className="col-qty" />
-              <col className="col-unit" />
-              <col className="col-rate" />
-              <col className="col-amount" />
-              <col className="col-summary-label" />
-              <col className="col-summary-value" />
-            </colgroup>
-            <tbody>
-            <tr className="excel-title-row">
-              <td colSpan={3} rowSpan={2}>
-                <div className="autopal-logo-block">
-                  <div className="autopal-logo-mark">AUTOPAL</div>
-                  <span>Excellence in Lighting</span>
+        <div className="invoice-paper ail-pi-sheet a4-invoice-sheet">
+          <div className="ail-orange-ribbon ail-orange-ribbon-top" />
+          <header className="ail-pi-header">
+            <div className="ail-logo-panel">
+              <img alt="AUTOPAL" className="ail-logo-image" src="/autopal-logo.png" />
+            </div>
+
+            <div className="ail-company-head">
+              <h1>PROFORMA INVOICE</h1>
+              <h2>{formatCompanyTitle(company, previewForm)}</h2>
+              <p>{companyAddressLines.slice(0, 2).join(', ')}</p>
+              <p>{companyAddressLines.slice(2).join(', ')}</p>
+              <p className="ail-company-ids">
+                <strong>CIN :</strong> {company?.cin || '-'}
+                <b>|</b>
+                <strong>GSTIN :</strong> {company?.gstin || '-'}
+              </p>
+            </div>
+
+            <section className="ail-pi-details">
+              <h3>PI DETAILS</h3>
+              <dl>
+                <div>
+                  <dt>PI No.</dt>
+                  <dd>{form.piNumber || '-'}</dd>
                 </div>
-              </td>
-              <td className="invoice-main-title" colSpan={5} rowSpan={2}>
-                PROFORMA INVOICE
-              </td>
-              <td className="text-right bold" colSpan={2}>
-                Original
-              </td>
-            </tr>
-            <tr>
-              <td colSpan={2}></td>
-            </tr>
+                <div>
+                  <dt>Date</dt>
+                  <dd>{formatDate(form.piDate) || '-'}</dd>
+                </div>
+                <div>
+                  <dt>Valid Upto</dt>
+                  <dd>{formatDate(getValidUntil(form)) || '-'}</dd>
+                </div>
+                <div>
+                  <dt>Place of Supply</dt>
+                  <dd>{customer?.placeOfSupply || form.customerCity || '-'}</dd>
+                </div>
+                <div>
+                  <dt>State Code</dt>
+                  <dd>{customer?.stateCode || form.stateCode || '-'}</dd>
+                </div>
+                <div>
+                  <dt>Reverse Charge</dt>
+                  <dd>No</dd>
+                </div>
+                <div>
+                  <dt>Currency</dt>
+                  <dd>{form.currency || customer?.currency || 'INR'}</dd>
+                </div>
+              </dl>
+            </section>
+          </header>
 
-            <tr>
-              <td className="bold" colSpan={5}>
-                {company?.legalName ?? 'Company pending'}
-              </td>
-              <td className="bold" colSpan={5}>
-                {customer?.name ?? 'Customer pending'}
-              </td>
-            </tr>
-            <tr>
-              <td colSpan={5}>{company?.address}</td>
-              <td colSpan={5}>{customer?.address}</td>
-            </tr>
-            <tr>
-              <td colSpan={5}>
-                Phone&nbsp;&nbsp;:&nbsp;&nbsp; {company?.phone}
-              </td>
-              <td colSpan={5}>Phone&nbsp;:&nbsp;&nbsp; {customer?.phone}</td>
-            </tr>
-            <tr>
-              <td colSpan={3}>E-mail&nbsp;:&nbsp;&nbsp; {company?.email}</td>
-              <td colSpan={2}>Web&nbsp;:&nbsp; {company?.website}</td>
-              <td colSpan={2}>State Code&nbsp;:&nbsp;&nbsp; {customer?.stateCode}</td>
-              <td colSpan={3}>State&nbsp;:&nbsp;&nbsp; {customer?.state.toUpperCase()}</td>
-            </tr>
-            <tr>
-              <td colSpan={5}>CIN&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp; {company?.cin}</td>
-              <td colSpan={5}>
-                Place of Supply&nbsp;:&nbsp; {customer?.placeOfSupply}
-              </td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                GSTIN NO :
-              </td>
-              <td className="bold" colSpan={3}>
-                {company?.gstin}
-              </td>
-              <td className="center bold" colSpan={2} rowSpan={2}>
-                PI NO.
-                <br />
-                {form.piNumber}
-              </td>
-              <td className="center bold" colSpan={3} rowSpan={2}>
-                Date : {formatDate(form.piDate)}
-              </td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={5}>
-                Tax is Payable On Reverse Charge (Yes/No): No
-              </td>
-            </tr>
+          <section className="ail-party-grid">
+            <div className="ail-box ail-billing-box">
+              <h3>BILLING PARTY</h3>
+              <div className="ail-box-content">
+                <h4>{customer?.name || form.prospectiveCustomerName || 'Customer pending'}</h4>
+                <p>{customer?.address || form.prospectiveAddress || '-'}</p>
+                <p>GSTIN : {customer?.gstin || form.prospectiveGstNo || '-'}</p>
+                <p>State : {getStateDisplay(customer) || form.customerState || '-'}</p>
+              </div>
+            </div>
 
-            <tr>
-              <td className="bold" colSpan={3}>
-                Challan No. :
-              </td>
-              <td className="bold" colSpan={2}>
-                Date :
-              </td>
-              <td className="bold" colSpan={3}>
-                Party&apos;s GSTIN No. :
-              </td>
-              <td className="bold" colSpan={2}>
-                {customer?.gstin ?? ''}
-              </td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                Mode of Transport:
-              </td>
-              <td colSpan={3}>{form.dispatchTerms}</td>
-              <td colSpan={3}>Party&apos;s PO No. :</td>
-              <td colSpan={2}>{customer?.partyPoNumber ?? ''}</td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                Vehicle Regn. No. :
-              </td>
-              <td colSpan={3}></td>
-              <td colSpan={3}>Vendor Code :</td>
-              <td colSpan={2}>{customer?.vendorCode ?? ''}</td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                No. of Packages :
-              </td>
-              <td colSpan={3}></td>
-              <td colSpan={3}>Email :</td>
-              <td colSpan={2}>{customer?.email}</td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                Transporter :
-              </td>
-              <td colSpan={3}></td>
-              <td colSpan={5} rowSpan={3}></td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                Destination :
-              </td>
-              <td colSpan={3}>{customer?.placeOfSupply}</td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                GR No. :
-              </td>
-              <td colSpan={3}></td>
-            </tr>
+            <div className="ail-box ail-dispatch-box">
+              <h3>SHIPPING / DISPATCH DETAILS</h3>
+              <div className="ail-dispatch-content">
+                <dl>
+                  <div>
+                    <dt>Transporter</dt>
+                    <dd>{form.transporter || ''}</dd>
+                  </div>
+                  <div>
+                    <dt>Mode of Transport</dt>
+                    <dd>{form.transportMode || form.dispatchTerms || 'BY ROAD'}</dd>
+                  </div>
+                  <div>
+                    <dt>Destination</dt>
+                    <dd>{form.destination || customer?.placeOfSupply || ''}</dd>
+                  </div>
+                  <div>
+                    <dt>Vehicle Regn. No.</dt>
+                    <dd></dd>
+                  </div>
+                  <div>
+                    <dt>No. of Packages</dt>
+                    <dd></dd>
+                  </div>
+                  <div>
+                    <dt>GR No.</dt>
+                    <dd></dd>
+                  </div>
+                  <div>
+                    <dt>Challan No.</dt>
+                    <dd></dd>
+                  </div>
+                </dl>
+                <dl>
+                  <div>
+                    <dt>Vendor Code</dt>
+                    <dd>{customer?.vendorCode || ''}</dd>
+                  </div>
+                  <div>
+                    <dt>Party's PO No.</dt>
+                    <dd>{form.custPoNo || customer?.partyPoNumber || ''}</dd>
+                  </div>
+                  <div>
+                    <dt>E-mail</dt>
+                    <dd>{customer?.email || ''}</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+          </section>
 
-            <tr className="product-header-row">
-              <th>S. NO</th>
-              <th>Product Code</th>
-              <th>Description & Specification of Goods</th>
-              <th>HSN Code</th>
-              <th>Qty.</th>
-              <th>Unit</th>
-              <th>Rate</th>
-              <th>Amount</th>
-              <th colSpan={2}>Remarks</th>
-            </tr>
-
-            {visibleLines.map((line, index) => (
-              <tr className="product-row" key={line.id}>
-                <td className="center">{index + 1}</td>
-                <td className="center">{line.productCode}</td>
-                <td>{line.description}</td>
-                <td className="center">{line.hsnCode}</td>
-                <td className="number-cell">{integerFormat.format(line.quantity)}</td>
-                <td className="center">{line.unit}</td>
-                <td className="number-cell">{numberFormat.format(line.unitPrice)}</td>
-                <td className="number-cell">
-                  {numberFormat.format(line.taxableAmount)}
-                </td>
-                <td colSpan={2}></td>
+          <table className="ail-products-table">
+            <thead>
+              <tr>
+                <th>S. No.</th>
+                <th>Product Code</th>
+                <th>Description & Specification of Goods</th>
+                <th>HSN Code</th>
+                <th>Qty.</th>
+                <th>Unit</th>
+                <th>Rate (&#8377;)</th>
+                <th>Amount (&#8377;)</th>
               </tr>
-            ))}
-
-            {Array.from({ length: fillerRows }).map((_, index) => (
-              <tr className="blank-product-row" key={`blank-${index}`}>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td colSpan={2}></td>
-              </tr>
-            ))}
-
-            {summaryRows.map((row, index) => (
-              <tr className="summary-row" key={row.label}>
-                {index === 0 ? (
-                  <>
-                    <td colSpan={4}></td>
-                    <td className="number-cell bold">
-                      {integerFormat.format(invoiceSummary.totalQuantity)}
-                    </td>
-                    <td colSpan={3}></td>
-                  </>
-                ) : (
-                  <td colSpan={8}></td>
-                )}
-                <td className={row.strong ? 'bold' : ''}>{row.label}</td>
-                <td className={`number-cell ${row.strong ? 'bold' : ''}`}>
-                  {row.value === undefined ? '' : numberFormat.format(row.value)}
+            </thead>
+            <tbody>
+              {productRows.map((line, index) => (
+                <tr key={line.id}>
+                  <td>{index + 1}</td>
+                  <td>{line.productCode}</td>
+                  <td>{line.description}</td>
+                  <td>{line.hsnCode}</td>
+                  <td>{line.quantity ? integerFormat.format(line.quantity) : ''}</td>
+                  <td>{line.unit}</td>
+                  <td>{line.unitPrice ? moneyFormat.format(line.unitPrice) : ''}</td>
+                  <td>
+                    {line.taxableAmount
+                      ? moneyFormat.format(line.taxableAmount)
+                      : '-'}
+                  </td>
+                </tr>
+              ))}
+              <tr className="ail-total-qty-row">
+                <td colSpan={8}>
+                  <div className="ail-total-qty-line">
+                    <span className="ail-tax-note-cell">
+                      NOTE : Taxes are round off to the nearest number.
+                    </span>
+                    <span className="ail-total-qty-group">
+                      <span className="ail-total-label">Total Quantity</span>
+                      <span className="ail-total-value">
+                        {integerFormat.format(invoiceSummary.totalQuantity)}
+                      </span>
+                    </span>
+                  </div>
                 </td>
               </tr>
-            ))}
-
-            <tr>
-              <td className="bold" colSpan={2}>
-                Tax Value (INR) :
-              </td>
-              <td className="bold" colSpan={6}>
-                {amountWords(invoiceSummary.taxTotal)}
-              </td>
-              <td colSpan={2}></td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={2}>
-                Inv. Value (INR) :
-              </td>
-              <td className="bold" colSpan={6}>
-                {amountWords(invoiceSummary.grandTotal)}
-              </td>
-              <td colSpan={2}></td>
-            </tr>
-            <tr>
-              <td colSpan={10}>
-                Certified that particulars given above are true and correct and
-                the amount indicated represents the price actually charged and
-                that there is no additional consideration directly or indirectly
-                from the buyer.
-              </td>
-            </tr>
-            <tr>
-              <td className="bold" colSpan={3}>
-                Terms & Conditions :
-              </td>
-              <td className="center bold" colSpan={3}>
-                E. & O.E
-              </td>
-              <td className="text-right bold" colSpan={4}>
-                For {company?.legalName ?? 'Company pending'}
-              </td>
-            </tr>
-            <tr>
-              <td colSpan={10}>1. Subject to Jaipur Jurisdiction.</td>
-            </tr>
-            <tr>
-              <td colSpan={10}>
-                2. No complaints will be entertained after 7 days from the date
-                of delivery of goods.
-              </td>
-            </tr>
-            <tr>
-              <td colSpan={10}>
-                3. Our responsibility ceases when the goods are delivered to the
-                party or the courier / transporter.
-              </td>
-            </tr>
-            <tr className="signature-row">
-              <td className="bold" colSpan={3}>
-                Prepared by
-              </td>
-              <td className="center bold" colSpan={3}>
-                Checked by
-              </td>
-              <td className="text-right bold" colSpan={4}>
-                Authorised Signatory
-              </td>
-            </tr>
             </tbody>
           </table>
+
+          <section className="ail-lower-grid">
+            <div className="ail-left-stack">
+              <div className="ail-box ail-words-box">
+                <h3>AMOUNT IN WORDS</h3>
+                <p>{amountWords(invoiceSummary.grandTotal)}</p>
+              </div>
+              <div className="ail-box ail-terms-box">
+                <h3>TERMS & CONDITIONS</h3>
+                <ol>
+                  {terms.map((term) => (
+                    <li key={term}>{term}</li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+
+            <div className="ail-box ail-bank-box">
+              <h3>BANK DETAILS FOR PAYMENT</h3>
+              <dl>
+                <div>
+                  <dt>Bank Name</dt>
+                  <dd>{company?.bankDetails.bankName || '-'}</dd>
+                </div>
+                <div className="ail-bank-account-row">
+                  <dt>Account Name</dt>
+                  <dd className="ail-bank-account-name">
+                    {company?.bankDetails.accountName || company?.legalName || '-'}
+                  </dd>
+                </div>
+                <div className="ail-bank-account-number-row">
+                  <dt>Account No.</dt>
+                  <dd>{company?.bankDetails.accountNumber || '-'}</dd>
+                </div>
+                <div>
+                  <dt>Branch</dt>
+                  <dd>{company?.bankDetails.branch || '-'}</dd>
+                </div>
+                <div>
+                  <dt>IFSC Code</dt>
+                  <dd>{company?.bankDetails.ifsc || '-'}</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="ail-summary-box">
+              <table>
+                <tbody>
+                  {summaryRows.map((row) => (
+                    <tr
+                      className={[
+                        row.strong ? 'ail-strong-row' : '',
+                        row.sectionBreak ? 'ail-summary-break-row' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      key={row.label}
+                    >
+                      <td>{row.label}</td>
+                      <td>{dashForZero(row.value)}</td>
+                    </tr>
+                  ))}
+                  <tr className="ail-grand-total-row">
+                    <td>GRAND TOTAL (&#8377;)</td>
+                    <td>{moneyFormat.format(invoiceSummary.grandTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="ail-signature-grid">
+            <div>
+              <strong>PREPARED BY</strong>
+              <span></span>
+            </div>
+            <div>
+              <strong>CHECKED BY</strong>
+              <span></span>
+            </div>
+            <div>
+              <strong>For {company?.legalName || company?.name || 'Company'}</strong>
+              <b>Authorized Signatory</b>
+            </div>
+          </section>
+
+          <footer className="ail-footer">
+            <div className="ail-footer-contact-row">
+              <span className="ail-footer-contact-item">
+                <svg
+                  aria-hidden="true"
+                  className="ail-footer-icon"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.32 1.77.59 2.61a2 2 0 0 1-.45 2.11L8 9.69a16 16 0 0 0 6.31 6.31l1.25-1.25a2 2 0 0 1 2.11-.45c.84.27 1.71.47 2.61.59A2 2 0 0 1 22 16.92z" />
+                </svg>
+                <strong>Phone :</strong>
+                <span>{footerPhoneNumber}</span>
+              </span>
+              <span className="ail-footer-contact-separator"></span>
+              <span className="ail-footer-contact-item">
+                <svg
+                  aria-hidden="true"
+                  className="ail-footer-icon"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 3.2 8 5.3 8-5.3V6l-8 5.3L4 6v1.2z" />
+                </svg>
+                <strong>E-mail :</strong>
+                <span>{company?.email || '-'}</span>
+              </span>
+            </div>
+            <ul className="ail-footer-product-row">
+              <li>HALOGEN BULBS</li>
+              <li>HEAD LAMPS</li>
+              <li>LED LIGHTING</li>
+              <li>AUXILIARY LAMPS</li>
+              <li>WORK LAMPS</li>
+            </ul>
+          </footer>
+          <div className="ail-orange-ribbon ail-orange-ribbon-bottom" />
         </div>
       </div>
     </aside>

@@ -34,5 +34,17 @@
     "gstPercent": 18,
     "createdAt": "2026-05-30T00:00:00.000Z",
     "updatedAt": "2026-05-30T00:00:00.000Z"
+  },
+  {
+    "id": "32-00-0190",
+    "code": "32-00-0190",
+    "description": "BULB H4 24 V 130/100W P43t",
+    "hsnCode": "85392120",
+    "category": "Halogen Bulbs",
+    "market": 4,
+    "unit": "NOS",
+    "gstPercent": 18,
+    "createdAt": "2026-05-30T00:00:00.000Z",
+    "updatedAt": "2026-05-30T00:00:00.000Z"
   }
 ]

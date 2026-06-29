@@ -21,10 +21,7 @@ export const calculateLine = (line: LineItem): LineCalculation => {
   const quantity = cleanNumber(line.quantity)
   const unitPrice = cleanNumber(line.unitPrice)
   const gstPercent = cleanNumber(line.gstPercent)
-  const discountPercent = cleanNumber(line.discountPercent)
-  const grossAmount = roundMoney(quantity * unitPrice)
-  const discountAmount = roundMoney((grossAmount * discountPercent) / 100)
-  const taxableAmount = roundMoney(grossAmount - discountAmount)
+  const taxableAmount = roundMoney(quantity * unitPrice)
   const gstAmount = roundMoney((taxableAmount * gstPercent) / 100)
 
   return {
@@ -107,8 +104,15 @@ export const calculateDomesticInvoiceSummary = (
   const total = roundMoney(
     calculatedLines.reduce((sum, line) => sum + line.taxableAmount, 0),
   )
+  const lineDiscountTotal = roundMoney(
+    calculatedLines.reduce(
+      (sum, line) =>
+        sum + (line.taxableAmount * cleanNumber(line.discountPercent)) / 100,
+      0,
+    ),
+  )
   const schemeDiscount = roundMoney(
-    options.schemeDiscount ?? total * 0.1,
+    options.schemeDiscount ?? lineDiscountTotal,
   )
   const netTotal = roundMoney(total - schemeDiscount)
   const specialDiscount = roundMoney(

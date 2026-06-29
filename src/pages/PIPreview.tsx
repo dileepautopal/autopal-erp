@@ -9,12 +9,22 @@ type PIPreviewProps = {
 }
 
 type PIPreviewForm = PIFormState & {
+  cgstAmount?: number
   company?: Company
   companyName?: string
   customer?: Customer
   custName?: string
+  grandTotal?: number
   gstNo?: string
+  igstAmount?: number
+  netTaxableValue?: number
+  sgstAmount?: number
   stateCode?: number
+}
+
+const toNumber = (value: unknown) => {
+  const number = Number(value ?? 0)
+  return Number.isFinite(number) ? number : 0
 }
 
 export function PIPreview({ form, onNavigate }: PIPreviewProps) {
@@ -44,6 +54,15 @@ export function PIPreview({ form, onNavigate }: PIPreviewProps) {
       gstin: form.prospectiveGstNo || previewForm.gstNo,
     } satisfies Customer)
   const totals = calculatePITotals(form.lineItems, form.freight, form.discount)
+  const storedHeaderTotal =
+    toNumber(previewForm.grandTotal) ||
+    toNumber(previewForm.netTaxableValue) +
+      toNumber(previewForm.igstAmount) +
+      toNumber(previewForm.cgstAmount) +
+      toNumber(previewForm.sgstAmount) +
+      toNumber(form.freight) +
+      toNumber(form.roundOff)
+  const grandTotal = storedHeaderTotal > 0 ? storedHeaderTotal : totals.grandTotal
 
   return (
     <div className="page preview-page">
@@ -57,7 +76,7 @@ export function PIPreview({ form, onNavigate }: PIPreviewProps) {
         </div>
         <div className="header-actions">
           <span className="status-pill">
-            {formatCurrency(totals.grandTotal, form.currency)}
+            {formatCurrency(grandTotal, form.currency || 'INR')}
           </span>
           <Button onClick={() => onNavigate('create-pi')} variant="secondary">
             Edit PI

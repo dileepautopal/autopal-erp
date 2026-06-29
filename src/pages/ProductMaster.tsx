@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { Button } from '../components/ui/Button'
 import { InputField, SelectField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
@@ -8,6 +14,8 @@ import { parseNumber } from '../utils/calculations'
 const ALL_FILTER_VALUE = 'all'
 const PRODUCT_API_URL = apiUrl('/api/master-products')
 const MARKET_API_URL = apiUrl('/api/master-markets')
+const PRODUCT_COLUMN_WIDTHS_STORAGE_KEY =
+  'autopal-product-master-column-widths'
 const productCategoryOptions = ['Head Lamp', 'Halogen Bulbs']
 const fallbackProductMarketOptions: FieldOption[] = [
   { value: '0', label: 'N.A.' },
@@ -34,6 +42,91 @@ type ProductPopup =
       mode: 'confirm-delete'
       productId: string
     }
+
+const productTableColumns = [
+  { defaultWidth: 14, id: 'code', label: 'Product code', minWidth: 10 },
+  { defaultWidth: 30, id: 'description', label: 'Description', minWidth: 18 },
+  { defaultWidth: 9, id: 'hsn', label: 'HSN', minWidth: 7 },
+  { defaultWidth: 13, id: 'category', label: 'Category', minWidth: 9 },
+  { defaultWidth: 12, id: 'market', label: 'Market', minWidth: 9 },
+  { defaultWidth: 7, id: 'unit', label: 'Unit', minWidth: 5 },
+  { defaultWidth: 6, id: 'gst', label: 'GST', minWidth: 5 },
+  { defaultWidth: 9, id: 'actions', label: 'Actions', minWidth: 7 },
+] as const
+
+type ProductTableColumnId = (typeof productTableColumns)[number]['id']
+type ProductColumnWidths = Record<ProductTableColumnId, number>
+type ProductColumnResize = {
+  columnId: ProductTableColumnId
+  nextColumnId: ProductTableColumnId
+  nextStartWidth: number
+  startWidth: number
+  startX: number
+  tableWidth: number
+}
+
+const getDefaultProductColumnWidths = () =>
+  productTableColumns.reduce(
+    (widths, column) => ({
+      ...widths,
+      [column.id]: column.defaultWidth,
+    }),
+    {} as ProductColumnWidths,
+  )
+
+const productColumnMinWidths = productTableColumns.reduce(
+  (widths, column) => ({
+    ...widths,
+    [column.id]: column.minWidth,
+  }),
+  {} as ProductColumnWidths,
+)
+
+const getStoredProductColumnWidths = () => {
+  const defaultWidths = getDefaultProductColumnWidths()
+
+  if (typeof window === 'undefined') {
+    return defaultWidths
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(
+      PRODUCT_COLUMN_WIDTHS_STORAGE_KEY,
+    )
+
+    if (!storedValue) {
+      return defaultWidths
+    }
+
+    const parsedValue = JSON.parse(storedValue) as Partial<
+      Record<ProductTableColumnId, unknown>
+    >
+    const storedWidths = productTableColumns.reduce(
+      (widths, column) => ({
+        ...widths,
+        [column.id]: Number(parsedValue[column.id]),
+      }),
+      {} as ProductColumnWidths,
+    )
+    const hasValidWidths = productTableColumns.every(
+      (column) =>
+        Number.isFinite(storedWidths[column.id]) &&
+        storedWidths[column.id] >= column.minWidth,
+    )
+    const totalWidth = productTableColumns.reduce(
+      (total, column) => total + storedWidths[column.id],
+      0,
+    )
+
+    if (hasValidWidths && Math.abs(totalWidth - 100) < 0.5) {
+      return storedWidths
+    }
+  } catch {
+    // Ignore old or malformed stored layout preferences.
+  }
+
+  return defaultWidths
+}
 
 const getProductMarketLabel = (market: number, options: FieldOption[]) =>
   options.find((option) => option.value === String(market))
@@ -77,6 +170,10 @@ export function ProductMaster() {
     fallbackProductMarketOptions,
   )
   const [productPopup, setProductPopup] = useState<ProductPopup | null>(null)
+  const [productColumnWidths, setProductColumnWidths] = useState(
+    getStoredProductColumnWidths,
+  )
+  const productColumnResizeRef = useRef<ProductColumnResize | null>(null)
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -139,6 +236,64 @@ export function ProductMaster() {
     }
 
     void loadProducts()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(
+      PRODUCT_COLUMN_WIDTHS_STORAGE_KEY,
+      JSON.stringify(productColumnWidths),
+    )
+  }, [productColumnWidths])
+
+  useEffect(() => {
+    const stopColumnResize = () => {
+      productColumnResizeRef.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    const resizeColumn = (event: MouseEvent) => {
+      const resize = productColumnResizeRef.current
+
+      if (!resize) {
+        return
+      }
+
+      const deltaWidth =
+        ((event.clientX - resize.startX) / resize.tableWidth) * 100
+      const minDelta =
+        productColumnMinWidths[resize.columnId] - resize.startWidth
+      const maxDelta =
+        resize.nextStartWidth - productColumnMinWidths[resize.nextColumnId]
+      const boundedDelta = Math.min(
+        Math.max(deltaWidth, minDelta),
+        maxDelta,
+      )
+
+      setProductColumnWidths((currentWidths) => ({
+        ...currentWidths,
+        [resize.columnId]: Number(
+          (resize.startWidth + boundedDelta).toFixed(2),
+        ),
+        [resize.nextColumnId]: Number(
+          (resize.nextStartWidth - boundedDelta).toFixed(2),
+        ),
+      }))
+    }
+
+    document.addEventListener('mousemove', resizeColumn)
+    document.addEventListener('mouseup', stopColumnResize)
+
+    return () => {
+      document.removeEventListener('mousemove', resizeColumn)
+      document.removeEventListener('mouseup', stopColumnResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
   }, [])
 
   const categoryFilterOptions = useMemo<FieldOption[]>(() => {
@@ -225,6 +380,32 @@ export function ProductMaster() {
         product.id === productId ? { ...product, [field]: value } : product,
       ),
     )
+  }
+
+  const startProductColumnResize = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    columnIndex: number,
+  ) => {
+    const column = productTableColumns[columnIndex]
+    const nextColumn = productTableColumns[columnIndex + 1]
+    const table = event.currentTarget.closest('table')
+    const tableWidth = table?.getBoundingClientRect().width ?? 0
+
+    if (!column || !nextColumn || tableWidth <= 0) {
+      return
+    }
+
+    productColumnResizeRef.current = {
+      columnId: column.id,
+      nextColumnId: nextColumn.id,
+      nextStartWidth: productColumnWidths[nextColumn.id],
+      startWidth: productColumnWidths[column.id],
+      startX: event.clientX,
+      tableWidth,
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    event.preventDefault()
   }
 
   const editProduct = (productId: string) => {
@@ -621,16 +802,32 @@ export function ProductMaster() {
         <section className="panel">
           <div className="responsive-table">
             <table className="master-table product-master-table">
+              <colgroup>
+                {productTableColumns.map((column) => (
+                  <col
+                    key={column.id}
+                    style={{ width: `${productColumnWidths[column.id]}%` }}
+                  />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Product code</th>
-                  <th>Description</th>
-                  <th>HSN</th>
-                  <th>Category</th>
-                  <th>Market</th>
-                  <th>Unit</th>
-                  <th>GST</th>
-                  <th>Actions</th>
+                  {productTableColumns.map((column, index) => (
+                    <th className="resizable-column-header" key={column.id}>
+                      <span>{column.label}</span>
+                      {index < productTableColumns.length - 1 ? (
+                        <button
+                          aria-label={`Resize ${column.label} column`}
+                          className="column-resize-handle"
+                          onMouseDown={(event) =>
+                            startProductColumnResize(event, index)
+                          }
+                          title="Drag to resize column"
+                          type="button"
+                        />
+                      ) : null}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
