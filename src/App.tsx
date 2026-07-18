@@ -5,6 +5,11 @@ import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
 import { Dashboard } from './pages/Dashboard'
+import {
+  LegalPage,
+  PublicNotFoundPage,
+  isLegalPagePath,
+} from './pages/LegalPage'
 import { LoginPage } from './pages/LoginPage'
 import { PIList } from './pages/PIList'
 import { ProductMaster } from './pages/ProductMaster'
@@ -232,7 +237,7 @@ const getStoredLoginSession = (): UserSession | null => {
   }
 }
 
-function App() {
+function AuthenticatedApp() {
   const [loginSession, setLoginSession] = useState<UserSession | null>(
     getStoredLoginSession,
   )
@@ -515,6 +520,21 @@ function App() {
       )}
     </AppShell>
   )
+}
+
+function App() {
+  const currentPath =
+    typeof window === 'undefined' ? '' : window.location.pathname
+
+  if (currentPath === '/') {
+    return <AuthenticatedApp />
+  }
+
+  if (isLegalPagePath(currentPath)) {
+    return <LegalPage path={currentPath} />
+  }
+
+  return <PublicNotFoundPage />
 }
 
 export default App
