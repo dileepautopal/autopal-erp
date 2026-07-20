@@ -2,6 +2,8 @@ import express from 'express'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
+const WHATSAPP_MESSAGE_TABLE_NAME = 'tran_whatsapp_pi_messages'
+const WHATSAPP_WEBHOOK_EVENT_TABLE_NAME = 'tran_whatsapp_webhook_events'
 
 const toText = (value) => String(value ?? '').trim()
 
@@ -610,6 +612,289 @@ const collectWhatsappMessages = (payload) => {
   return messages
 }
 
+let whatsappMessageSchemaPromise
+
+const ensureWhatsappMessageSchema = async (pool) => {
+  if (!whatsappMessageSchemaPromise) {
+    whatsappMessageSchemaPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ${WHATSAPP_MESSAGE_TABLE_NAME} (
+          id bigserial PRIMARY KEY,
+          message_id varchar(160) UNIQUE,
+          received_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          sender_name varchar(160),
+          sender_phone varchar(50),
+          message_type varchar(40),
+          message_text text NOT NULL DEFAULT '',
+          import_status varchar(40) NOT NULL DEFAULT 'received',
+          import_result jsonb
+        )
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_tran_whatsapp_pi_messages_received_at
+        ON ${WHATSAPP_MESSAGE_TABLE_NAME} (received_at DESC, id DESC)
+      `)
+    })()
+  }
+
+  try {
+    await whatsappMessageSchemaPromise
+  } catch (error) {
+    whatsappMessageSchemaPromise = undefined
+    throw error
+  }
+}
+
+let whatsappWebhookEventSchemaPromise
+
+const ensureWhatsappWebhookEventSchema = async (pool) => {
+  if (!whatsappWebhookEventSchemaPromise) {
+    whatsappWebhookEventSchemaPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ${WHATSAPP_WEBHOOK_EVENT_TABLE_NAME} (
+          id bigserial PRIMARY KEY,
+          received_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          method varchar(10) NOT NULL,
+          url text NOT NULL,
+          remote_address varchar(120),
+          user_agent text,
+          query jsonb,
+          body jsonb,
+          message_count integer NOT NULL DEFAULT 0,
+          response_status integer,
+          note text
+        )
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_tran_whatsapp_webhook_events_received_at
+        ON ${WHATSAPP_WEBHOOK_EVENT_TABLE_NAME} (received_at DESC, id DESC)
+      `)
+    })()
+  }
+
+  try {
+    await whatsappWebhookEventSchemaPromise
+  } catch (error) {
+    whatsappWebhookEventSchemaPromise = undefined
+    throw error
+  }
+}
+
+const mapIncomingWhatsappMessageRow = (row) => ({
+  id: Number(row.id),
+  importStatus: row.import_status ?? '',
+  messageId: row.message_id ?? '',
+  messageText: row.message_text ?? '',
+  messageType: row.message_type ?? '',
+  receivedAt:
+    row.received_at instanceof Date
+      ? row.received_at.toISOString()
+      : row.received_at ?? '',
+  senderName: row.sender_name ?? '',
+  senderPhone: row.sender_phone ?? '',
+})
+
+const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) => {
+  await ensureWhatsappMessageSchema(dependencies.pool)
+  const limit = Math.min(Math.max(toNumberValue(requestedLimit, 10), 1), 50)
+  const result = await dependencies.pool.query(
+    `
+      SELECT
+        id,
+        message_id,
+        received_at,
+        sender_name,
+        sender_phone,
+        message_type,
+        message_text,
+        import_status
+      FROM ${WHATSAPP_MESSAGE_TABLE_NAME}
+      ORDER BY received_at DESC, id DESC
+      LIMIT $1
+    `,
+    [limit],
+  )
+
+  return result.rows.map(mapIncomingWhatsappMessageRow)
+}
+
+const mapWebhookEventRow = (row) => ({
+  body: row.body ?? null,
+  id: Number(row.id),
+  messageCount: Number(row.message_count ?? 0),
+  method: row.method ?? '',
+  note: row.note ?? '',
+  query: row.query ?? null,
+  receivedAt:
+    row.received_at instanceof Date
+      ? row.received_at.toISOString()
+      : row.received_at ?? '',
+  remoteAddress: row.remote_address ?? '',
+  responseStatus: row.response_status ? Number(row.response_status) : null,
+  url: row.url ?? '',
+  userAgent: row.user_agent ?? '',
+})
+
+const getWebhookEvents = async (dependencies, requestedLimit = 20) => {
+  await ensureWhatsappWebhookEventSchema(dependencies.pool)
+  const limit = Math.min(Math.max(toNumberValue(requestedLimit, 20), 1), 100)
+  const result = await dependencies.pool.query(
+    `
+      SELECT
+        id,
+        received_at,
+        method,
+        url,
+        remote_address,
+        user_agent,
+        query,
+        body,
+        message_count,
+        response_status,
+        note
+      FROM ${WHATSAPP_WEBHOOK_EVENT_TABLE_NAME}
+      ORDER BY received_at DESC, id DESC
+      LIMIT $1
+    `,
+    [limit],
+  )
+
+  return result.rows.map(mapWebhookEventRow)
+}
+
+const saveWebhookEvent = async (
+  dependencies,
+  request,
+  { messageCount = 0, note = '', responseStatus = null } = {},
+) => {
+  await ensureWhatsappWebhookEventSchema(dependencies.pool)
+  const result = await dependencies.pool.query(
+    `
+      INSERT INTO ${WHATSAPP_WEBHOOK_EVENT_TABLE_NAME}
+        (
+          method,
+          url,
+          remote_address,
+          user_agent,
+          query,
+          body,
+          message_count,
+          response_status,
+          note
+        )
+      VALUES
+        ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9)
+      RETURNING
+        id,
+        received_at,
+        method,
+        url,
+        remote_address,
+        user_agent,
+        query,
+        body,
+        message_count,
+        response_status,
+        note
+    `,
+    [
+      request.method,
+      request.originalUrl ?? request.url,
+      request.ip ?? request.socket?.remoteAddress ?? '',
+      request.get('user-agent') ?? '',
+      JSON.stringify(request.query ?? {}),
+      request.method === 'GET' ? null : JSON.stringify(request.body ?? {}),
+      messageCount,
+      responseStatus,
+      note,
+    ],
+  )
+
+  return mapWebhookEventRow(result.rows[0])
+}
+
+const getImportStatus = (importResult) => {
+  if (!importResult) {
+    return 'received'
+  }
+
+  if (importResult.duplicate) {
+    return 'duplicate'
+  }
+
+  if (importResult.inserted) {
+    return 'imported'
+  }
+
+  return 'error'
+}
+
+const saveIncomingWhatsappMessage = async (
+  dependencies,
+  {
+    importResult = null,
+    importStatus = '',
+    messageId,
+    messageText,
+    messageType,
+    senderName,
+    senderPhone,
+  },
+) => {
+  await ensureWhatsappMessageSchema(dependencies.pool)
+
+  const storedMessageId = toLimitedText(
+    messageId || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    160,
+  )
+  const result = await dependencies.pool.query(
+    `
+      INSERT INTO ${WHATSAPP_MESSAGE_TABLE_NAME}
+        (
+          message_id,
+          received_at,
+          sender_name,
+          sender_phone,
+          message_type,
+          message_text,
+          import_status,
+          import_result
+        )
+      VALUES
+        ($1, CURRENT_TIMESTAMP, $2, $3, $4, $5, $6, $7::jsonb)
+      ON CONFLICT (message_id)
+      DO UPDATE SET
+        received_at = CURRENT_TIMESTAMP,
+        sender_name = EXCLUDED.sender_name,
+        sender_phone = EXCLUDED.sender_phone,
+        message_type = EXCLUDED.message_type,
+        message_text = EXCLUDED.message_text,
+        import_status = EXCLUDED.import_status,
+        import_result = EXCLUDED.import_result
+      RETURNING
+        id,
+        message_id,
+        received_at,
+        sender_name,
+        sender_phone,
+        message_type,
+        message_text,
+        import_status
+    `,
+    [
+      storedMessageId,
+      toLimitedText(senderName, 160),
+      toLimitedText(senderPhone, 50),
+      toLimitedText(messageType, 40),
+      normalizeText(messageText),
+      importStatus || getImportStatus(importResult),
+      importResult ? JSON.stringify(importResult) : null,
+    ],
+  )
+
+  return mapIncomingWhatsappMessageRow(result.rows[0])
+}
+
 const downloadWhatsappMedia = async (mediaId) => {
   const token = process.env.WHATSAPP_ACCESS_TOKEN
 
@@ -728,23 +1013,65 @@ export const createWhatsappPIRouter = (dependencies) => {
     })
   })
 
-  router.get('/webhook', (request, response) => {
+  router.get('/messages', async (request, response, next) => {
+    try {
+      response.json({
+        ok: true,
+        messages: await getIncomingWhatsappMessages(
+          dependencies,
+          request.query.limit,
+        ),
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.get('/webhook-events', async (request, response, next) => {
+    try {
+      response.json({
+        events: await getWebhookEvents(dependencies, request.query.limit),
+        ok: true,
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.get('/webhook', async (request, response, next) => {
     const mode = request.query['hub.mode']
     const token = request.query['hub.verify_token']
     const challenge = request.query['hub.challenge']
 
-    if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-      response.status(200).send(challenge)
-      return
-    }
+    try {
+      if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+        await saveWebhookEvent(dependencies, request, {
+          note: 'verify ok',
+          responseStatus: 200,
+        })
+        response.status(200).send(challenge)
+        return
+      }
 
-    response.sendStatus(403)
+      await saveWebhookEvent(dependencies, request, {
+        note: 'verify failed',
+        responseStatus: 403,
+      })
+      response.sendStatus(403)
+    } catch (error) {
+      next(error)
+    }
   })
 
   router.post('/webhook', async (request, response, next) => {
     try {
       const messages = collectWhatsappMessages(request.body)
       const results = []
+      await saveWebhookEvent(dependencies, request, {
+        messageCount: messages.length,
+        note: messages.length > 0 ? 'message webhook' : 'no messages in payload',
+        responseStatus: 200,
+      })
 
       for (const { contact, message } of messages) {
         let text = ''
@@ -767,13 +1094,47 @@ export const createWhatsappPIRouter = (dependencies) => {
           continue
         }
 
-        const parsed = parseWhatsappPIText(text, {
+        const messageSource = {
           messageId: message.id,
           senderName: contact?.profile?.name ?? '',
           senderPhone: message.from ?? contact?.wa_id ?? '',
           sourceType: message.type,
+        }
+        await saveIncomingWhatsappMessage(dependencies, {
+          ...messageSource,
+          importStatus: 'received',
+          messageText: text,
+          messageType: message.type,
         })
-        results.push(await importParsedPI(parsed, dependencies))
+
+        const parsed = parseWhatsappPIText(text, {
+          ...messageSource,
+        })
+        try {
+          const importResult = await importParsedPI(parsed, dependencies)
+          await saveIncomingWhatsappMessage(dependencies, {
+            ...messageSource,
+            importResult,
+            messageText: text,
+            messageType: message.type,
+          })
+          results.push(importResult)
+        } catch (error) {
+          await saveIncomingWhatsappMessage(dependencies, {
+            ...messageSource,
+            importResult: {
+              errors: [
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to import WhatsApp message.',
+              ],
+              inserted: false,
+            },
+            messageText: text,
+            messageType: message.type,
+          })
+          throw error
+        }
       }
 
       response.json({ ok: true, received: messages.length, results })

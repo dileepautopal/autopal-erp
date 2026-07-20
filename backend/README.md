@@ -109,6 +109,8 @@ GET    /api/r-market-pis/:id
 POST   /api/r-market-pis
 
 WhatsApp PI import:
+GET    /api/whatsapp-pi/messages
+GET    /api/whatsapp-pi/webhook-events
 GET    /api/whatsapp-pi/webhook
 POST   /api/whatsapp-pi/webhook
 POST   /api/whatsapp-pi/parse-text
@@ -267,6 +269,10 @@ WhatsApp Cloud API webhook:
 Verify URL:  GET  /api/whatsapp-pi/webhook
 Receive URL: POST /api/whatsapp-pi/webhook
 ```
+
+The latest received WhatsApp text is saved in `tran_whatsapp_pi_messages` and
+shown automatically on the WhatsApp Connect screen. Webhook hits are saved in
+`tran_whatsapp_webhook_events` for troubleshooting Meta/ngrok delivery.
 
 Environment variables:
 

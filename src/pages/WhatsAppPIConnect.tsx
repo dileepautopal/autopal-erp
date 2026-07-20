@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { TextareaField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
@@ -48,6 +48,17 @@ type ImportResult = {
   warnings?: string[]
 }
 
+type IncomingWhatsappMessage = {
+  id: number
+  importStatus: string
+  messageId: string
+  messageText: string
+  messageType: string
+  receivedAt: string
+  senderName: string
+  senderPhone: string
+}
+
 type APIErrorBody = {
   detail?: string
   errors?: string[]
@@ -57,6 +68,7 @@ type APIErrorBody = {
 const STATUS_API_URL = apiUrl('/api/whatsapp-pi/status')
 const PARSE_API_URL = apiUrl('/api/whatsapp-pi/parse-text')
 const IMPORT_API_URL = apiUrl('/api/whatsapp-pi/import-text')
+const MESSAGES_API_URL = apiUrl('/api/whatsapp-pi/messages?limit=1')
 
 const sampleMessage = [
   'Date: 20/06/2026',
@@ -88,6 +100,21 @@ const formatMoney = (value: number | undefined) =>
     style: 'currency',
   }).format(Number(value ?? 0))
 
+const formatIncomingMessageTime = (value: string) => {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+  }).format(date)
+}
+
 export function WhatsAppPIConnect({
   onImported,
   onNavigate,
@@ -100,6 +127,9 @@ export function WhatsAppPIConnect({
   const [noticeType, setNoticeType] = useState<'error' | 'success'>('success')
   const [isParsing, setIsParsing] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
+  const [latestIncomingMessage, setLatestIncomingMessage] =
+    useState<IncomingWhatsappMessage | null>(null)
+  const latestIncomingMessageKeyRef = useRef('')
 
   useEffect(() => {
     const loadStatus = async () => {
@@ -117,6 +147,63 @@ export function WhatsAppPIConnect({
     }
 
     void loadStatus()
+  }, [])
+
+  useEffect(() => {
+    let isActive = true
+
+    const loadLatestMessage = async () => {
+      try {
+        const response = await fetch(MESSAGES_API_URL)
+
+        if (!response.ok) {
+          return
+        }
+
+        const body = (await response.json()) as {
+          messages?: IncomingWhatsappMessage[]
+        }
+        const latestMessage = body.messages?.[0]
+
+        if (!isActive || !latestMessage?.messageText) {
+          return
+        }
+
+        const latestKey = String(
+          latestMessage.id ||
+            latestMessage.messageId ||
+            latestMessage.receivedAt,
+        )
+
+        if (!latestKey || latestKey === latestIncomingMessageKeyRef.current) {
+          return
+        }
+
+        latestIncomingMessageKeyRef.current = latestKey
+        setLatestIncomingMessage(latestMessage)
+        setMessageText(latestMessage.messageText)
+        setParsedMessage(null)
+        setImportResult(null)
+        setNoticeType('success')
+        setNotice(
+          latestMessage.senderName
+            ? `WhatsApp message received from ${latestMessage.senderName}`
+            : 'WhatsApp message received',
+        )
+      } catch {
+        // Keep the current message if polling fails.
+      }
+    }
+
+    void loadLatestMessage()
+    const intervalId = window.setInterval(() => {
+      void loadLatestMessage()
+    }, 5000)
+
+    return () => {
+      isActive = false
+      window.clearInterval(intervalId)
+    }
   }, [])
 
   const webhookUrl = useMemo(() => {
@@ -244,6 +331,12 @@ export function WhatsAppPIConnect({
               <h2>Incoming PI Text</h2>
             </div>
             <div className="header-actions">
+              {latestIncomingMessage ? (
+                <span className="status-pill">
+                  {formatIncomingMessageTime(latestIncomingMessage.receivedAt) ||
+                    'Received'}
+                </span>
+              ) : null}
               <Button disabled={isParsing || isImporting} onClick={parseMessage} variant="ghost">
                 {isParsing ? 'Parsing' : 'Parse'}
               </Button>
