@@ -12,6 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT ?? 5000)
 const DIST_PATH = path.resolve(__dirname, '../dist')
 const INDEX_HTML_PATH = path.join(DIST_PATH, 'index.html')
+const ROBOTS_TXT_PATH = path.join(DIST_PATH, 'robots.txt')
 const USER_TABLE_NAME = 'master_user'
 const USER_RIGHTS_TABLE_NAME = 'master_user_rights'
 const USER_LOGIN_LOG_TABLE_NAME = 'tran_userlog'
@@ -29,6 +30,12 @@ const RMKT_PI_MASTER_TABLE_NAME = 'master_pi_rmkt'
 const RMKT_PI_TRAN_TABLE_NAME = 'tran_pi_rmkt'
 const CUSTOMER_DUPLICATE_MESSAGE =
   'Customer with same name, address, and city already exists.'
+const PUBLIC_REQUEST_LOG_PATHS = new Set([
+  '/robots.txt',
+  '/privacy.html',
+  '/terms.html',
+  '/data-deletion.html',
+])
 const MENU_SCREEN_IDS = [
   'dashboard',
   'create-pi',
@@ -55,6 +62,39 @@ const pool = new Pool({
 
 const app = express()
 app.set('trust proxy', true)
+
+app.use((request, response, next) => {
+  if (PUBLIC_REQUEST_LOG_PATHS.has(request.path)) {
+    response.on('finish', () => {
+      console.log(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          method: request.method,
+          path: request.path,
+          userAgent: request.get('user-agent') ?? '',
+          status: response.statusCode,
+        }),
+      )
+    })
+  }
+
+  next()
+})
+
+app.get('/robots.txt', (_request, response) => {
+  response.type('text/plain')
+
+  if (!fs.existsSync(ROBOTS_TXT_PATH)) {
+    response.status(404).send('robots.txt not found')
+    return
+  }
+
+  response.sendFile(ROBOTS_TXT_PATH)
+})
+
+if (fs.existsSync(DIST_PATH)) {
+  app.use(express.static(DIST_PATH))
+}
 
 app.use(express.json())
 
@@ -3810,10 +3850,6 @@ app.use(
     },
   }),
 )
-
-if (fs.existsSync(DIST_PATH)) {
-  app.use(express.static(DIST_PATH))
-}
 
 app.get(/^(?!\/api).*/, (_request, response, next) => {
   if (!fs.existsSync(INDEX_HTML_PATH)) {
