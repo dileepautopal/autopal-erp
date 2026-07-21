@@ -10,6 +10,7 @@
     "start": "node backend/server.js",
     "start:cloud": "node backend/server.js",
     "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
+    "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

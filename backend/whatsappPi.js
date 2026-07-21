@@ -612,6 +612,82 @@ const collectWhatsappMessages = (payload) => {
   return messages
 }
 
+const getWhatsappReceivedAt = (message) => {
+  const timestamp = Number(message?.timestamp ?? 0)
+
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return null
+  }
+
+  return new Date(timestamp * 1000).toISOString()
+}
+
+const getInitialWhatsappMessageText = (message) => {
+  if (message?.type === 'text') {
+    return message.text?.body ?? ''
+  }
+
+  if (message?.type === 'image') {
+    return message.image?.caption ?? ''
+  }
+
+  return ''
+}
+
+const getWhatsappMessageSource = (contact, message) => ({
+  messageId:
+    message.id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  receivedAt: getWhatsappReceivedAt(message),
+  senderName: contact?.profile?.name ?? '',
+  senderPhone: message.from ?? contact?.wa_id ?? '',
+  sourceType: message.type,
+})
+
+const logWhatsappWebhook = (event, details = {}) => {
+  console.log(
+    JSON.stringify({
+      event,
+      ...details,
+    }),
+  )
+}
+
+const createWebhookResult = ({
+  duplicate = false,
+  errors = [],
+  inserted = false,
+  messageId = '',
+  parseStatus = 'RECEIVED',
+  piCreated = false,
+  saved = false,
+  warnings = [],
+} = {}) => ({
+  duplicate,
+  errors: normalizeJSONList(errors),
+  inserted,
+  message_id: messageId,
+  ok: true,
+  parse_status: parseStatus,
+  pi_created: piCreated,
+  received: true,
+  saved,
+  warnings: normalizeJSONList(warnings),
+})
+
+const getParsedPIValidationErrors = (parsed) => {
+  const errors = []
+
+  if (!parsed.partyName) {
+    errors.push('Customer name was not found in the WhatsApp message.')
+  }
+
+  if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+    errors.push('No product rows were found in the WhatsApp message.')
+  }
+
+  return errors
+}
+
 let whatsappMessageSchemaPromise
 
 const ensureWhatsappMessageSchema = async (pool) => {
@@ -626,9 +702,61 @@ const ensureWhatsappMessageSchema = async (pool) => {
           sender_phone varchar(50),
           message_type varchar(40),
           message_text text NOT NULL DEFAULT '',
+          raw_text text NOT NULL DEFAULT '',
+          source_type varchar(40),
           import_status varchar(40) NOT NULL DEFAULT 'received',
-          import_result jsonb
+          import_result jsonb,
+          parse_status varchar(40) NOT NULL DEFAULT 'RECEIVED',
+          parse_warnings jsonb NOT NULL DEFAULT '[]'::jsonb,
+          parse_errors jsonb NOT NULL DEFAULT '[]'::jsonb,
+          parsed_payload jsonb,
+          pi_created boolean NOT NULL DEFAULT FALSE,
+          created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
+      `)
+      await pool.query(`
+        ALTER TABLE ${WHATSAPP_MESSAGE_TABLE_NAME}
+          ADD COLUMN IF NOT EXISTS raw_text text NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS source_type varchar(40),
+          ADD COLUMN IF NOT EXISTS parse_status varchar(40) NOT NULL DEFAULT 'RECEIVED',
+          ADD COLUMN IF NOT EXISTS parse_warnings jsonb NOT NULL DEFAULT '[]'::jsonb,
+          ADD COLUMN IF NOT EXISTS parse_errors jsonb NOT NULL DEFAULT '[]'::jsonb,
+          ADD COLUMN IF NOT EXISTS parsed_payload jsonb,
+          ADD COLUMN IF NOT EXISTS pi_created boolean NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+      `)
+      await pool.query(`
+        UPDATE ${WHATSAPP_MESSAGE_TABLE_NAME}
+        SET raw_text = message_text
+        WHERE raw_text = ''
+          AND message_text <> ''
+      `)
+      await pool.query(`
+        UPDATE ${WHATSAPP_MESSAGE_TABLE_NAME}
+        SET source_type = message_type
+        WHERE (source_type IS NULL OR source_type = '')
+          AND message_type IS NOT NULL
+          AND message_type <> ''
+      `)
+      await pool.query(`
+        UPDATE ${WHATSAPP_MESSAGE_TABLE_NAME}
+        SET parse_status =
+          CASE
+            WHEN LOWER(import_status) = 'imported' THEN 'PI_CREATED'
+            WHEN LOWER(import_status) = 'duplicate' THEN 'DUPLICATE'
+            WHEN LOWER(import_status) = 'error' THEN 'PI_FAILED'
+            ELSE 'RECEIVED'
+          END
+        WHERE parse_status IS NULL
+           OR parse_status = ''
+           OR parse_status = 'RECEIVED'
+      `)
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tran_whatsapp_pi_messages_message_id
+        ON ${WHATSAPP_MESSAGE_TABLE_NAME} (message_id)
+        WHERE message_id IS NOT NULL
       `)
       await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_tran_whatsapp_pi_messages_received_at
@@ -686,6 +814,11 @@ const mapIncomingWhatsappMessageRow = (row) => ({
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
+  parseErrors: row.parse_errors ?? [],
+  parseStatus: row.parse_status ?? '',
+  parseWarnings: row.parse_warnings ?? [],
+  piCreated: Boolean(row.pi_created),
+  rawText: row.raw_text ?? row.message_text ?? '',
   receivedAt:
     row.received_at instanceof Date
       ? row.received_at.toISOString()
@@ -707,7 +840,12 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         sender_phone,
         message_type,
         message_text,
-        import_status
+        raw_text,
+        import_status,
+        parse_status,
+        parse_warnings,
+        parse_errors,
+        pi_created
       FROM ${WHATSAPP_MESSAGE_TABLE_NAME}
       ORDER BY received_at DESC, id DESC
       LIMIT $1
@@ -813,32 +951,40 @@ const saveWebhookEvent = async (
   return mapWebhookEventRow(result.rows[0])
 }
 
-const getImportStatus = (importResult) => {
-  if (!importResult) {
-    return 'received'
-  }
-
-  if (importResult.duplicate) {
-    return 'duplicate'
-  }
-
-  if (importResult.inserted) {
+const mapParseStatusToImportStatus = (parseStatus) => {
+  if (parseStatus === 'PI_CREATED') {
     return 'imported'
   }
 
-  return 'error'
+  if (parseStatus === 'DUPLICATE') {
+    return 'duplicate'
+  }
+
+  if (parseStatus === 'PARSE_FAILED' || parseStatus === 'PI_FAILED') {
+    return 'error'
+  }
+
+  return 'received'
+}
+
+const normalizeJSONList = (value) => {
+  if (!value) {
+    return []
+  }
+
+  return Array.isArray(value) ? value : [value]
 }
 
 const saveIncomingWhatsappMessage = async (
   dependencies,
   {
-    importResult = null,
-    importStatus = '',
     messageId,
     messageText,
     messageType,
+    receivedAt = null,
     senderName,
     senderPhone,
+    sourceType,
   },
 ) => {
   await ensureWhatsappMessageSchema(dependencies.pool)
@@ -856,21 +1002,37 @@ const saveIncomingWhatsappMessage = async (
           sender_name,
           sender_phone,
           message_type,
+          source_type,
           message_text,
+          raw_text,
           import_status,
-          import_result
+          parse_status,
+          parse_warnings,
+          parse_errors,
+          pi_created,
+          created_at,
+          updated_at
         )
       VALUES
-        ($1, CURRENT_TIMESTAMP, $2, $3, $4, $5, $6, $7::jsonb)
+        (
+          $1,
+          COALESCE($2::timestamptz, CURRENT_TIMESTAMP),
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $7,
+          'received',
+          'RECEIVED',
+          '[]'::jsonb,
+          '[]'::jsonb,
+          FALSE,
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        )
       ON CONFLICT (message_id)
-      DO UPDATE SET
-        received_at = CURRENT_TIMESTAMP,
-        sender_name = EXCLUDED.sender_name,
-        sender_phone = EXCLUDED.sender_phone,
-        message_type = EXCLUDED.message_type,
-        message_text = EXCLUDED.message_text,
-        import_status = EXCLUDED.import_status,
-        import_result = EXCLUDED.import_result
+      DO NOTHING
       RETURNING
         id,
         message_id,
@@ -878,21 +1040,125 @@ const saveIncomingWhatsappMessage = async (
         sender_name,
         sender_phone,
         message_type,
+        source_type,
         message_text,
-        import_status
+        raw_text,
+        import_status,
+        parse_status,
+        parse_warnings,
+        parse_errors,
+        pi_created
     `,
     [
       storedMessageId,
+      receivedAt,
       toLimitedText(senderName, 160),
       toLimitedText(senderPhone, 50),
       toLimitedText(messageType, 40),
+      toLimitedText(sourceType || messageType, 40),
       normalizeText(messageText),
-      importStatus || getImportStatus(importResult),
-      importResult ? JSON.stringify(importResult) : null,
     ],
   )
 
-  return mapIncomingWhatsappMessageRow(result.rows[0])
+  if (result.rowCount > 0) {
+    return {
+      duplicate: false,
+      inserted: true,
+      row: mapIncomingWhatsappMessageRow(result.rows[0]),
+    }
+  }
+
+  const existingResult = await dependencies.pool.query(
+    `
+      SELECT
+        id,
+        message_id,
+        received_at,
+        sender_name,
+        sender_phone,
+        message_type,
+        source_type,
+        message_text,
+        raw_text,
+        import_status,
+        parse_status,
+        parse_warnings,
+        parse_errors,
+        pi_created
+      FROM ${WHATSAPP_MESSAGE_TABLE_NAME}
+      WHERE message_id = $1
+      LIMIT 1
+    `,
+    [storedMessageId],
+  )
+
+  return {
+    duplicate: true,
+    inserted: false,
+    row: mapIncomingWhatsappMessageRow(existingResult.rows[0]),
+  }
+}
+
+const updateIncomingWhatsappMessageProcessing = async (
+  dependencies,
+  {
+    importResult = null,
+    messageId,
+    messageText,
+    parsedPayload = null,
+    parseErrors = [],
+    parseStatus,
+    parseWarnings = [],
+    piCreated = false,
+  },
+) => {
+  await ensureWhatsappMessageSchema(dependencies.pool)
+
+  const result = await dependencies.pool.query(
+    `
+      UPDATE ${WHATSAPP_MESSAGE_TABLE_NAME}
+      SET
+        message_text = $2,
+        raw_text = $2,
+        import_status = $3,
+        import_result = $4::jsonb,
+        parse_status = $5,
+        parse_warnings = $6::jsonb,
+        parse_errors = $7::jsonb,
+        parsed_payload = $8::jsonb,
+        pi_created = $9,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE message_id = $1
+      RETURNING
+        id,
+        message_id,
+        received_at,
+        sender_name,
+        sender_phone,
+        message_type,
+        source_type,
+        message_text,
+        raw_text,
+        import_status,
+        parse_status,
+        parse_warnings,
+        parse_errors,
+        pi_created
+    `,
+    [
+      toLimitedText(messageId, 160),
+      normalizeText(messageText),
+      mapParseStatusToImportStatus(parseStatus),
+      importResult ? JSON.stringify(importResult) : null,
+      parseStatus,
+      JSON.stringify(normalizeJSONList(parseWarnings)),
+      JSON.stringify(normalizeJSONList(parseErrors)),
+      parsedPayload ? JSON.stringify(parsedPayload) : null,
+      piCreated,
+    ],
+  )
+
+  return result.rowCount > 0 ? mapIncomingWhatsappMessageRow(result.rows[0]) : null
 }
 
 const downloadWhatsappMedia = async (mediaId) => {
@@ -1067,6 +1333,9 @@ export const createWhatsappPIRouter = (dependencies) => {
     try {
       const messages = collectWhatsappMessages(request.body)
       const results = []
+      logWhatsappWebhook('whatsapp_webhook_received', {
+        messageCount: messages.length,
+      })
       await saveWebhookEvent(dependencies, request, {
         messageCount: messages.length,
         note: messages.length > 0 ? 'message webhook' : 'no messages in payload',
@@ -1074,70 +1343,262 @@ export const createWhatsappPIRouter = (dependencies) => {
       })
 
       for (const { contact, message } of messages) {
-        let text = ''
-
-        if (message.type === 'text') {
-          text = message.text?.body ?? ''
-        } else if (message.type === 'image') {
-          text = message.image?.caption ?? ''
-
-          if (!text) {
-            const media = await downloadWhatsappMedia(message.image?.id)
-            text = await extractTextFromImage(media.buffer, media.mimeType)
-          }
-        } else {
-          results.push({
-            messageId: message.id,
-            inserted: false,
-            errors: [`Unsupported WhatsApp message type: ${message.type}`],
-          })
-          continue
-        }
-
-        const messageSource = {
-          messageId: message.id,
-          senderName: contact?.profile?.name ?? '',
-          senderPhone: message.from ?? contact?.wa_id ?? '',
-          sourceType: message.type,
-        }
-        await saveIncomingWhatsappMessage(dependencies, {
+        const messageSource = getWhatsappMessageSource(contact, message)
+        let text = getInitialWhatsappMessageText(message)
+        const savedMessage = await saveIncomingWhatsappMessage(dependencies, {
           ...messageSource,
-          importStatus: 'received',
           messageText: text,
           messageType: message.type,
         })
 
-        const parsed = parseWhatsappPIText(text, {
-          ...messageSource,
-        })
-        try {
-          const importResult = await importParsedPI(parsed, dependencies)
-          await saveIncomingWhatsappMessage(dependencies, {
-            ...messageSource,
-            importResult,
-            messageText: text,
-            messageType: message.type,
+        if (savedMessage.duplicate) {
+          logWhatsappWebhook('whatsapp_duplicate_message_detected', {
+            messageId: messageSource.messageId,
+            parseStatus: savedMessage.row?.parseStatus ?? 'DUPLICATE',
           })
-          results.push(importResult)
+          results.push(
+            createWebhookResult({
+              duplicate: true,
+              errors: savedMessage.row?.parseErrors ?? [],
+              inserted: false,
+              messageId: messageSource.messageId,
+              parseStatus: savedMessage.row?.parseStatus || 'DUPLICATE',
+              piCreated: Boolean(savedMessage.row?.piCreated),
+              saved: true,
+              warnings: savedMessage.row?.parseWarnings ?? [],
+            }),
+          )
+          continue
+        }
+
+        logWhatsappWebhook('whatsapp_raw_message_saved', {
+          inserted: true,
+          messageId: messageSource.messageId,
+        })
+
+        try {
+          if (message.type === 'image' && !text) {
+            const media = await downloadWhatsappMedia(message.image?.id)
+            text = await extractTextFromImage(media.buffer, media.mimeType)
+          }
+
+          if (!['text', 'image'].includes(message.type)) {
+            throw new Error(`Unsupported WhatsApp message type: ${message.type}`)
+          }
         } catch (error) {
-          await saveIncomingWhatsappMessage(dependencies, {
-            ...messageSource,
+          const errors = [
+            error instanceof Error
+              ? error.message
+              : 'Unable to read WhatsApp message text.',
+          ]
+          await updateIncomingWhatsappMessageProcessing(dependencies, {
             importResult: {
-              errors: [
-                error instanceof Error
-                  ? error.message
-                  : 'Unable to import WhatsApp message.',
-              ],
+              errors,
               inserted: false,
             },
+            messageId: messageSource.messageId,
             messageText: text,
-            messageType: message.type,
+            parseErrors: errors,
+            parseStatus: 'PARSE_FAILED',
           })
-          throw error
+          logWhatsappWebhook('whatsapp_parsing_failed', {
+            messageId: messageSource.messageId,
+            parseStatus: 'PARSE_FAILED',
+          })
+          results.push(
+            createWebhookResult({
+              errors,
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus: 'PARSE_FAILED',
+              saved: true,
+            }),
+          )
+          continue
+        }
+
+        let parsed
+
+        try {
+          parsed = parseWhatsappPIText(text, {
+            ...messageSource,
+          })
+        } catch (error) {
+          const errors = [
+            error instanceof Error
+              ? error.message
+              : 'Unable to parse WhatsApp message.',
+          ]
+          await updateIncomingWhatsappMessageProcessing(dependencies, {
+            importResult: {
+              errors,
+              inserted: false,
+            },
+            messageId: messageSource.messageId,
+            messageText: text,
+            parseErrors: errors,
+            parseStatus: 'PARSE_FAILED',
+          })
+          logWhatsappWebhook('whatsapp_parsing_failed', {
+            messageId: messageSource.messageId,
+            parseStatus: 'PARSE_FAILED',
+          })
+          results.push(
+            createWebhookResult({
+              errors,
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus: 'PARSE_FAILED',
+              saved: true,
+            }),
+          )
+          continue
+        }
+
+        const parseErrors = getParsedPIValidationErrors(parsed)
+
+        if (parseErrors.length > 0) {
+          await updateIncomingWhatsappMessageProcessing(dependencies, {
+            importResult: {
+              errors: parseErrors,
+              inserted: false,
+              parsed,
+              warnings: parsed.warnings,
+            },
+            messageId: messageSource.messageId,
+            messageText: text,
+            parsedPayload: parsed,
+            parseErrors,
+            parseStatus: 'PARSE_FAILED',
+            parseWarnings: parsed.warnings,
+          })
+          logWhatsappWebhook('whatsapp_parsing_failed', {
+            messageId: messageSource.messageId,
+            parseStatus: 'PARSE_FAILED',
+          })
+          results.push(
+            createWebhookResult({
+              errors: parseErrors,
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus: 'PARSE_FAILED',
+              saved: true,
+              warnings: parsed.warnings,
+            }),
+          )
+          continue
+        }
+
+        await updateIncomingWhatsappMessageProcessing(dependencies, {
+          importResult: {
+            inserted: false,
+            parsed,
+            warnings: parsed.warnings,
+          },
+          messageId: messageSource.messageId,
+          messageText: text,
+          parsedPayload: parsed,
+          parseStatus: 'PARSED',
+          parseWarnings: parsed.warnings,
+        })
+        logWhatsappWebhook('whatsapp_parsing_succeeded', {
+          messageId: messageSource.messageId,
+          parseStatus: 'PARSED',
+        })
+
+        try {
+          const importResult = await importParsedPI(parsed, dependencies)
+          const importErrors = normalizeJSONList(importResult.errors)
+          const parseStatus = importResult.inserted
+            ? 'PI_CREATED'
+            : importResult.duplicate
+              ? 'DUPLICATE'
+              : 'PI_FAILED'
+          const piCreated = Boolean(importResult.inserted)
+
+          await updateIncomingWhatsappMessageProcessing(dependencies, {
+            importResult,
+            messageId: messageSource.messageId,
+            messageText: text,
+            parsedPayload: importResult.parsed ?? parsed,
+            parseErrors: importErrors,
+            parseStatus,
+            parseWarnings: importResult.warnings ?? [],
+            piCreated,
+          })
+
+          if (piCreated) {
+            logWhatsappWebhook('whatsapp_pi_created', {
+              messageId: messageSource.messageId,
+              parseStatus,
+            })
+          } else {
+            logWhatsappWebhook('whatsapp_pi_creation_failed', {
+              messageId: messageSource.messageId,
+              parseStatus,
+            })
+          }
+
+          results.push(
+            createWebhookResult({
+              duplicate: Boolean(importResult.duplicate),
+              errors: importErrors,
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus,
+              piCreated,
+              saved: true,
+              warnings: importResult.warnings ?? [],
+            }),
+          )
+        } catch (error) {
+          const errors = [
+            error instanceof Error
+              ? error.message
+              : 'Unable to create PI from WhatsApp message.',
+          ]
+          await updateIncomingWhatsappMessageProcessing(dependencies, {
+            importResult: {
+              errors,
+              inserted: false,
+              parsed,
+            },
+            messageId: messageSource.messageId,
+            messageText: text,
+            parsedPayload: parsed,
+            parseErrors: errors,
+            parseStatus: 'PI_FAILED',
+            parseWarnings: parsed.warnings,
+          })
+          logWhatsappWebhook('whatsapp_pi_creation_failed', {
+            messageId: messageSource.messageId,
+            parseStatus: 'PI_FAILED',
+          })
+          results.push(
+            createWebhookResult({
+              errors,
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus: 'PI_FAILED',
+              saved: true,
+              warnings: parsed.warnings,
+            }),
+          )
         }
       }
 
-      response.json({ ok: true, received: messages.length, results })
+      response.json({
+        duplicate: results.some((result) => result.duplicate),
+        errors: results.flatMap((result) => result.errors),
+        inserted: results.some((result) => result.inserted),
+        ok: true,
+        parse_status: results.length === 1 ? results[0].parse_status : 'MULTIPLE_MESSAGES',
+        pi_created: results.some((result) => result.pi_created),
+        received: messages.length,
+        results,
+        saved: results.filter((result) => result.saved).length,
+        warnings: results.flatMap((result) => result.warnings),
+      })
     } catch (error) {
       next(error)
     }
