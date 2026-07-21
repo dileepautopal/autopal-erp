@@ -9,6 +9,7 @@
     "server": "node backend/server.js",
     "start": "node backend/server.js",
     "start:cloud": "node backend/server.js",
+    "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

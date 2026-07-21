@@ -1,4 +1,9 @@
 import 'dotenv/config'
+import {
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +18,7 @@ const PORT = Number(process.env.PORT ?? 5000)
 const DIST_PATH = path.resolve(__dirname, '../dist')
 const INDEX_HTML_PATH = path.join(DIST_PATH, 'index.html')
 const ROBOTS_TXT_PATH = path.join(DIST_PATH, 'robots.txt')
+const META_DATA_DELETION_TABLE_NAME = 'meta_data_deletion_requests'
 const USER_TABLE_NAME = 'master_user'
 const USER_RIGHTS_TABLE_NAME = 'master_user_rights'
 const USER_LOGIN_LOG_TABLE_NAME = 'tran_userlog'
@@ -96,6 +102,7 @@ if (fs.existsSync(DIST_PATH)) {
   app.use(express.static(DIST_PATH))
 }
 
+app.use(express.urlencoded({ extended: false }))
 app.use(express.json())
 
 app.use((request, response, next) => {
@@ -293,6 +300,163 @@ const lookupIPLocation = async (ipAddress) => {
 
   return null
 }
+
+let metaDataDeletionSchemaPromise
+
+const ensureMetaDataDeletionSchema = async () => {
+  if (!metaDataDeletionSchemaPromise) {
+    metaDataDeletionSchemaPromise = pool.query(`
+      CREATE TABLE IF NOT EXISTS ${META_DATA_DELETION_TABLE_NAME} (
+        id bigserial PRIMARY KEY,
+        meta_user_id varchar(120) NOT NULL,
+        confirmation_code varchar(80) NOT NULL UNIQUE,
+        status varchar(40) NOT NULL DEFAULT 'requested',
+        requested_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at timestamptz,
+        notes text
+      )
+    `)
+  }
+
+  try {
+    await metaDataDeletionSchemaPromise
+  } catch (error) {
+    metaDataDeletionSchemaPromise = undefined
+    throw error
+  }
+}
+
+const decodeBase64URL = (value) => {
+  const encodedValue = String(value ?? '').trim()
+
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(encodedValue)) {
+    throw new Error('Invalid base64url value.')
+  }
+
+  const base64Value = encodedValue
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(encodedValue.length / 4) * 4, '=')
+
+  return Buffer.from(base64Value, 'base64')
+}
+
+const verifyMetaSignedRequest = (signedRequest) => {
+  const appSecret = String(process.env.META_APP_SECRET ?? '').trim()
+
+  if (!appSecret) {
+    return {
+      errorStatus: 503,
+      message: 'Meta data deletion callback is not configured.',
+    }
+  }
+
+  const parts = String(signedRequest ?? '').split('.')
+
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return { errorStatus: 400, message: 'Invalid signed request.' }
+  }
+
+  try {
+    const signature = decodeBase64URL(parts[0])
+    const payloadBuffer = decodeBase64URL(parts[1])
+    const expectedSignature = createHmac('sha256', appSecret)
+      .update(parts[1])
+      .digest()
+
+    if (
+      signature.length !== expectedSignature.length ||
+      !timingSafeEqual(signature, expectedSignature)
+    ) {
+      return { errorStatus: 403, message: 'Invalid signed request signature.' }
+    }
+
+    const payload = JSON.parse(payloadBuffer.toString('utf8'))
+    const algorithm = String(payload.algorithm ?? '').toUpperCase()
+
+    if (algorithm && algorithm !== 'HMAC-SHA256') {
+      return { errorStatus: 400, message: 'Unsupported signed request algorithm.' }
+    }
+
+    return { payload }
+  } catch {
+    return { errorStatus: 400, message: 'Invalid signed request payload.' }
+  }
+}
+
+const getMetaUserIdFromPayload = (payload) =>
+  String(
+    payload?.user_id ??
+      payload?.userID ??
+      payload?.userId ??
+      payload?.user?.id ??
+      '',
+  ).trim()
+
+const createConfirmationCode = () => randomBytes(18).toString('base64url')
+
+const createMetaDataDeletionRequest = async (metaUserId) => {
+  await ensureMetaDataDeletionSchema()
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const confirmationCode = createConfirmationCode()
+
+    try {
+      const result = await pool.query(
+        `
+          INSERT INTO ${META_DATA_DELETION_TABLE_NAME}
+            (meta_user_id, confirmation_code, status)
+          VALUES
+            ($1, $2, 'requested')
+          RETURNING confirmation_code, status, requested_at, completed_at
+        `,
+        [metaUserId, confirmationCode],
+      )
+
+      return result.rows[0]
+    } catch (error) {
+      if (error?.code === '23505') {
+        continue
+      }
+
+      throw error
+    }
+  }
+
+  throw new Error('Unable to create a unique confirmation code.')
+}
+
+const getPublicBaseUrl = (request) => {
+  const configuredBaseUrl = String(
+    process.env.PUBLIC_APP_URL ?? process.env.APP_PUBLIC_URL ?? '',
+  ).trim()
+
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/+$/, '')
+  }
+
+  const forwardedProto = String(request.get('x-forwarded-proto') ?? '')
+    .split(',')[0]
+    .trim()
+  const forwardedHost = String(request.get('x-forwarded-host') ?? '')
+    .split(',')[0]
+    .trim()
+  const protocol = forwardedProto || request.protocol || 'https'
+  const host = forwardedHost || request.get('host') || 'autopal-erp.onrender.com'
+
+  return `${protocol}://${host}`
+}
+
+const mapMetaDataDeletionStatusRow = (row) => ({
+  confirmation_code: row.confirmation_code,
+  status: row.status,
+  requested_at: row.requested_at
+    ? new Date(row.requested_at).toISOString()
+    : null,
+  completed_at: row.completed_at
+    ? new Date(row.completed_at).toISOString()
+    : null,
+})
 
 let userAdministrationSchemaPromise
 
@@ -2518,6 +2682,78 @@ app.get('/api/health', async (_request, response, next) => {
       service: 'autopal-master-api',
       status: 'ok',
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/meta/data-deletion', async (request, response, next) => {
+  try {
+    const signedRequest = request.body?.signed_request
+
+    if (typeof signedRequest !== 'string' || !signedRequest.trim()) {
+      response.status(400).json({ message: 'signed_request is required.' })
+      return
+    }
+
+    const verification = verifyMetaSignedRequest(signedRequest)
+
+    if (!verification.payload) {
+      response.status(verification.errorStatus).json({
+        message: verification.message,
+      })
+      return
+    }
+
+    const metaUserId = getMetaUserIdFromPayload(verification.payload)
+
+    if (!metaUserId) {
+      response.status(400).json({ message: 'Meta user ID is required.' })
+      return
+    }
+
+    const deletionRequest = await createMetaDataDeletionRequest(metaUserId)
+    const confirmationCode = deletionRequest.confirmation_code
+    const statusUrl = `${getPublicBaseUrl(
+      request,
+    )}/data-deletion-status.html?code=${encodeURIComponent(confirmationCode)}`
+
+    response.json({
+      url: statusUrl,
+      confirmation_code: confirmationCode,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/meta/data-deletion-status/:code', async (request, response, next) => {
+  try {
+    const confirmationCode = String(request.params.code ?? '').trim()
+
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(confirmationCode)) {
+      response.status(400).json({ message: 'Invalid confirmation code.' })
+      return
+    }
+
+    await ensureMetaDataDeletionSchema()
+
+    const result = await pool.query(
+      `
+        SELECT confirmation_code, status, requested_at, completed_at
+        FROM ${META_DATA_DELETION_TABLE_NAME}
+        WHERE confirmation_code = $1
+        LIMIT 1
+      `,
+      [confirmationCode],
+    )
+
+    if (result.rowCount === 0) {
+      response.status(404).json({ message: 'Deletion request not found.' })
+      return
+    }
+
+    response.json(mapMetaDataDeletionStatusRow(result.rows[0]))
   } catch (error) {
     next(error)
   }

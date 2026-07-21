@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AUTOPAL ERP Data Deletion Request Status</title>
+    <meta
+      name="description"
+      content="Status page for AUTOPAL ERP data deletion requests."
+    >
+    <style>
+      :root {
+        --autopal-red: #b5121b;
+        --autopal-red-dark: #7f0c13;
+        --background: #f3f4f6;
+        --card: #ffffff;
+        --ink: #1f2933;
+        --muted: #5f6b7a;
+        --line: #d9dee7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--background);
+        color: var(--ink);
+        font-family: Arial, Helvetica, sans-serif;
+        line-height: 1.65;
+      }
+
+      .page {
+        min-height: 100vh;
+        padding: 32px 16px;
+      }
+
+      .shell {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+
+      .header,
+      .card,
+      .footer {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 12px 32px rgba(31, 41, 51, 0.08);
+      }
+
+      .header {
+        padding: 24px;
+        margin-bottom: 18px;
+      }
+
+      .brand {
+        display: grid;
+        grid-template-columns: 118px 1fr;
+        gap: 22px;
+        align-items: center;
+      }
+
+      .logo {
+        width: 118px;
+        max-width: 100%;
+        height: auto;
+      }
+
+      .eyebrow {
+        margin: 0 0 4px;
+        color: var(--autopal-red);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .company {
+        display: block;
+        color: var(--muted);
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      h1 {
+        margin: 8px 0 0;
+        color: var(--autopal-red);
+        font-size: 30px;
+        line-height: 1.2;
+      }
+
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      .nav a,
+      .button-link {
+        border: 1px solid rgba(181, 18, 27, 0.25);
+        border-radius: 999px;
+        color: var(--autopal-red-dark);
+        font-size: 14px;
+        font-weight: 700;
+        padding: 8px 12px;
+        text-decoration: none;
+      }
+
+      .card {
+        padding: 28px;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        color: var(--autopal-red);
+        font-size: 20px;
+      }
+
+      p {
+        margin: 0 0 14px;
+      }
+
+      .status-box {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin: 22px 0;
+        padding: 18px;
+      }
+
+      .status-row {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .status-row:last-child {
+        border-bottom: 0;
+      }
+
+      .status-row span {
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .status-row strong {
+        overflow-wrap: anywhere;
+      }
+
+      .message {
+        background: #fff7f7;
+        border: 1px solid rgba(181, 18, 27, 0.2);
+        border-radius: 8px;
+        color: var(--autopal-red-dark);
+        margin: 18px 0;
+        padding: 14px;
+      }
+
+      a {
+        color: var(--autopal-red-dark);
+      }
+
+      .footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 18px;
+        padding: 18px 24px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      @media (max-width: 640px) {
+        .page {
+          padding: 18px 10px;
+        }
+
+        .brand,
+        .status-row {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 25px;
+        }
+
+        .card,
+        .header {
+          padding: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="shell">
+        <header class="header">
+          <div class="brand">
+            <img class="logo" src="/autopal-logo.png" alt="AUTOPAL logo">
+            <div>
+              <p class="eyebrow">AUTOPAL ERP</p>
+              <strong class="company">Autolite (India) Limited</strong>
+              <h1>Data Deletion Request Status</h1>
+            </div>
+          </div>
+          <nav class="nav" aria-label="Legal pages">
+            <a href="/privacy.html">Privacy Policy</a>
+            <a href="/terms.html">Terms of Service</a>
+            <a href="/data-deletion.html">Data Deletion Instructions</a>
+            <a href="/">Back to Login</a>
+          </nav>
+        </header>
+
+        <article class="card">
+          <h2>AUTOPAL ERP Data Deletion Status</h2>
+          <p>
+            This page confirms the status of a data deletion request submitted
+            through Meta or Facebook for AUTOPAL ERP. It does not display Meta
+            user ID, name, email address, phone number, or other personal
+            information.
+          </p>
+
+          <div class="status-box" id="status-box">
+            <div class="status-row">
+              <span>Confirmation code</span>
+              <strong id="confirmation-code">Not provided</strong>
+            </div>
+            <div class="status-row">
+              <span>Status</span>
+              <strong id="request-status">Enter a valid code in the page URL.</strong>
+            </div>
+            <div class="status-row">
+              <span>Requested date</span>
+              <strong id="requested-date">Not available</strong>
+            </div>
+            <div class="status-row">
+              <span>Completed date</span>
+              <strong id="completed-date">Not completed</strong>
+            </div>
+          </div>
+
+          <p class="message" id="status-message">
+            If you need help with a data deletion request, contact
+            <a href="mailto:admin@autopal.com">admin@autopal.com</a> with your
+            confirmation code.
+          </p>
+
+          <p>
+            Some business records may be retained where required for legal,
+            accounting, tax, audit, fraud prevention, security, contractual, or
+            legitimate business record purposes.
+          </p>
+
+          <a class="button-link" href="/data-deletion.html">
+            View data deletion instructions
+          </a>
+        </article>
+
+        <footer class="footer">
+          <strong>Autolite (India) Limited</strong>
+          <span>Jaipur, Rajasthan, India</span>
+          <a href="mailto:admin@autopal.com">admin@autopal.com</a>
+        </footer>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var code = (params.get('code') || '').trim();
+        var codeElement = document.getElementById('confirmation-code');
+        var statusElement = document.getElementById('request-status');
+        var requestedElement = document.getElementById('requested-date');
+        var completedElement = document.getElementById('completed-date');
+        var messageElement = document.getElementById('status-message');
+
+        if (!code) {
+          return;
+        }
+
+        codeElement.textContent = code;
+
+        if (!/^[A-Za-z0-9_-]{8,80}$/.test(code)) {
+          statusElement.textContent = 'Invalid confirmation code format.';
+          return;
+        }
+
+        fetch('/api/meta/data-deletion-status/' + encodeURIComponent(code), {
+          headers: { Accept: 'application/json' },
+        })
+          .then(function (response) {
+            if (!response.ok) {
+              throw new Error('Status not found.');
+            }
+
+            return response.json();
+          })
+          .then(function (data) {
+            statusElement.textContent = data.status || 'requested';
+            requestedElement.textContent = data.requested_at || 'Not available';
+            completedElement.textContent = data.completed_at || 'Not completed';
+            messageElement.textContent =
+              'This status response does not include personal information.';
+          })
+          .catch(function () {
+            statusElement.textContent = 'Status not found.';
+          });
+      })();
+    </script>
+  </body>
+</html>
