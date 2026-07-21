@@ -392,11 +392,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       </section>
       <footer className="login-legal-footer">
         <nav aria-label="Legal pages">
-          <a href="/privacy">Privacy Policy</a>
+          <a href="/privacy.html">Privacy Policy</a>
           <span aria-hidden="true">|</span>
-          <a href="/terms">Terms & Conditions</a>
+          <a href="/terms.html">Terms & Conditions</a>
           <span aria-hidden="true">|</span>
-          <a href="/data-deletion">Data Deletion Policy</a>
+          <a href="/data-deletion.html">Data Deletion Policy</a>
         </nav>
         <p>Version 1.0.0</p>
         <p>© 2026 Autolite (India) Limited.</p>

@@ -6,10 +6,10 @@ import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
 import { Dashboard } from './pages/Dashboard'
 import {
-  LegalPage,
   PublicNotFoundPage,
   isLegalPagePath,
 } from './pages/LegalPage'
+import type { LegalPagePath } from './pages/LegalPage'
 import { LoginPage } from './pages/LoginPage'
 import { PIList } from './pages/PIList'
 import { ProductMaster } from './pages/ProductMaster'
@@ -23,6 +23,11 @@ import type { Company, PIFormState, SavedPI, ScreenId, UserSession } from './typ
 const COMPANY_API_URL = apiUrl('/api/master-companies')
 const PI_RMKT_API_URL = apiUrl('/api/master-pi-rmkt')
 const LOGIN_SESSION_KEY = 'autopal-login-user'
+const STATIC_LEGAL_PAGE_PATHS: Record<LegalPagePath, string> = {
+  '/privacy': '/privacy.html',
+  '/terms': '/terms.html',
+  '/data-deletion': '/data-deletion.html',
+}
 const getDefaultRights = (isAdmin = false) =>
   navItems
     .filter((item) => isAdmin || item.id !== 'admin-panel')
@@ -522,6 +527,14 @@ function AuthenticatedApp() {
   )
 }
 
+function StaticLegalRedirect({ targetPath }: { targetPath: string }) {
+  useEffect(() => {
+    window.location.replace(targetPath)
+  }, [targetPath])
+
+  return null
+}
+
 function App() {
   const currentPath =
     typeof window === 'undefined' ? '' : window.location.pathname
@@ -531,7 +544,7 @@ function App() {
   }
 
   if (isLegalPagePath(currentPath)) {
-    return <LegalPage path={currentPath} />
+    return <StaticLegalRedirect targetPath={STATIC_LEGAL_PAGE_PATHS[currentPath]} />
   }
 
   return <PublicNotFoundPage />
