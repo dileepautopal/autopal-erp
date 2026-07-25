@@ -10,6 +10,9 @@ import type {
   TradingProductRate,
 } from '../types'
 
+export const isAITestConsoleEnabled =
+  import.meta.env.DEV || import.meta.env.VITE_ENABLE_AI_TEST_CONSOLE === 'true'
+
 export const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', meta: 'Overview' },
   { id: 'create-pi', label: 'Create PI', meta: 'Primary workspace' },
@@ -20,6 +23,15 @@ export const navItems: NavItem[] = [
   { id: 'r-market-rates', label: 'R.Market Rates', meta: 'Trading rates' },
   { id: 'customer-discounts', label: 'Customer Discounts', meta: 'Scheme master' },
   { id: 'admin-panel', label: 'Admin Panel', meta: 'Users & rights' },
+  ...(isAITestConsoleEnabled
+    ? [
+        {
+          id: 'ai-test-console' as const,
+          label: 'AI Test Console',
+          meta: 'Developer tests',
+        },
+      ]
+    : []),
 ]
 
 export const companies: Company[] = [

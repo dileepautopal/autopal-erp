@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AppShell } from './components/layout/AppShell'
 import { AdminPanel } from './pages/AdminPanel'
+import { AICommunicationTestConsole } from './pages/AICommunicationTestConsole'
 import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
@@ -16,7 +17,7 @@ import { ProductMaster } from './pages/ProductMaster'
 import { RMarketProductRateMaster } from './pages/RMarketProductRateMaster'
 import { WhatsAppPIConnect } from './pages/WhatsAppPIConnect'
 import { apiUrl } from './config/api'
-import { navItems } from './data/mockData'
+import { isAITestConsoleEnabled, navItems } from './data/mockData'
 import { initialPIForm } from './data/piDefaults'
 import type { Company, PIFormState, SavedPI, ScreenId, UserSession } from './types'
 
@@ -28,6 +29,7 @@ const STATIC_LEGAL_PAGE_PATHS: Record<LegalPagePath, string> = {
   '/terms': '/terms.html',
   '/data-deletion': '/data-deletion.html',
 }
+const AI_TEST_CONSOLE_PATH = '/admin/ai-communication-test-console'
 const getDefaultRights = (isAdmin = false) =>
   navItems
     .filter((item) => isAdmin || item.id !== 'admin-panel')
@@ -198,7 +200,9 @@ const normalizeSessionRights = (rights?: ScreenId[], isAdmin = false) => {
 
   const allowedRights = rights.filter(
     (right) =>
-      navItems.some((item) => item.id === right) && right !== 'admin-panel',
+      navItems.some((item) => item.id === right) &&
+      right !== 'admin-panel' &&
+      right !== 'ai-test-console',
   )
 
   return allowedRights
@@ -242,11 +246,11 @@ const getStoredLoginSession = (): UserSession | null => {
   }
 }
 
-function AuthenticatedApp() {
+function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: ScreenId }) {
   const [loginSession, setLoginSession] = useState<UserSession | null>(
     getStoredLoginSession,
   )
-  const [activeScreen, setActiveScreen] = useState<ScreenId>('dashboard')
+  const [activeScreen, setActiveScreen] = useState<ScreenId>(initialScreen)
   const [companies, setCompanies] = useState<Company[]>([])
   const [piForm, setPiForm] = useState<PIFormState>(initialPIForm)
   const [savedPIs, setSavedPIs] = useState<SavedPI[]>([])
@@ -254,7 +258,8 @@ function AuthenticatedApp() {
   const visibleNavItems = useMemo(
     () =>
       navItems.filter((item) =>
-        loginSession?.rights.includes(item.id),
+        loginSession?.rights.includes(item.id) &&
+        (item.id !== 'ai-test-console' || Boolean(loginSession?.isAdmin)),
       ),
     [loginSession],
   )
@@ -308,12 +313,6 @@ function AuthenticatedApp() {
       window.removeEventListener('focus', syncLoginSession)
     }
   }, [])
-
-  useEffect(() => {
-    if (loginSession && !allowedScreenIds.has(activeScreen)) {
-      setActiveScreen(firstAllowedScreen)
-    }
-  }, [activeScreen, allowedScreenIds, firstAllowedScreen, loginSession])
 
   useEffect(() => {
     const loadCompanies = async () => {
@@ -458,7 +457,9 @@ function AuthenticatedApp() {
       rights: normalizeSessionRights(session.rights, session.isAdmin),
     }
     const nextScreen = normalizedSession.rights.includes('dashboard')
-      ? 'dashboard'
+      ? initialScreen === 'ai-test-console' && normalizedSession.isAdmin
+        ? 'ai-test-console'
+        : 'dashboard'
       : normalizedSession.rights[0] ?? 'dashboard'
 
     setLoginSession(normalizedSession)
@@ -483,18 +484,22 @@ function AuthenticatedApp() {
     return <LoginPage onLogin={handleLogin} />
   }
 
+  const currentScreen = allowedScreenIds.has(activeScreen)
+    ? activeScreen
+    : firstAllowedScreen
+
   return (
     <AppShell
-      activeScreen={activeScreen}
+      activeScreen={currentScreen}
       navItems={visibleNavItems}
       onLogout={handleLogout}
       onNavigate={navigate}
       userName={loggedInUser}
     >
-      {activeScreen === 'dashboard' && (
+      {currentScreen === 'dashboard' && (
         <Dashboard onNavigate={navigate} savedPIs={savedPIs} />
       )}
-      {activeScreen === 'create-pi' && (
+      {currentScreen === 'create-pi' && (
         <CreatePI
           form={piForm}
           companies={companies}
@@ -504,7 +509,7 @@ function AuthenticatedApp() {
           onSaveDraft={saveDraftPI}
         />
       )}
-      {activeScreen === 'pi-preview' && (
+      {currentScreen === 'pi-preview' && (
         <PIList
           companies={companies}
           onDelete={deleteSavedPI}
@@ -513,15 +518,18 @@ function AuthenticatedApp() {
           savedPIs={savedPIs}
         />
       )}
-      {activeScreen === 'whatsapp-pi' && (
+      {currentScreen === 'whatsapp-pi' && (
         <WhatsAppPIConnect onImported={loadBackendPIs} onNavigate={navigate} />
       )}
-      {activeScreen === 'customers' && <CustomerMaster />}
-      {activeScreen === 'products' && <ProductMaster />}
-      {activeScreen === 'r-market-rates' && <RMarketProductRateMaster />}
-      {activeScreen === 'customer-discounts' && <CustomerDiscountMaster />}
-      {activeScreen === 'admin-panel' && (
+      {currentScreen === 'customers' && <CustomerMaster />}
+      {currentScreen === 'products' && <ProductMaster />}
+      {currentScreen === 'r-market-rates' && <RMarketProductRateMaster />}
+      {currentScreen === 'customer-discounts' && <CustomerDiscountMaster />}
+      {currentScreen === 'admin-panel' && (
         <AdminPanel currentUserName={loginSession.userName} />
+      )}
+      {currentScreen === 'ai-test-console' && (
+        <AICommunicationTestConsole currentUserName={loginSession.userName} />
       )}
     </AppShell>
   )
@@ -541,6 +549,10 @@ function App() {
 
   if (currentPath === '/') {
     return <AuthenticatedApp />
+  }
+
+  if (currentPath === AI_TEST_CONSOLE_PATH && isAITestConsoleEnabled) {
+    return <AuthenticatedApp initialScreen="ai-test-console" />
   }
 
   if (isLegalPagePath(currentPath)) {

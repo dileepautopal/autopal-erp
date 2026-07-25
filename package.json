@@ -9,7 +9,16 @@
     "server": "node backend/server.js",
     "start": "node backend/server.js",
     "start:cloud": "node backend/server.js",
+    "reprice:pi": "node scripts/reprice-rmarket-pi.mjs",
+    "test:ai-console": "node scripts/test-ai-test-console.mjs",
+    "test:company-selection": "node --test backend/companySelectionService.test.js",
+    "test:customer-matcher": "node --test backend/customerFuzzyMatch.test.js",
     "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
+    "test:phase1": "node --test backend/phase1VerificationService.test.js",
+    "test:pi-commercial": "node --test backend/piCommercialService.test.js",
+    "test:pi-summary": "node --test backend/piSummaryService.test.js",
+    "test:whatsapp-ack": "node --test backend/whatsappAckService.test.js",
+    "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
     "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
@@ -21,9 +30,14 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.21.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "read-excel-file": "^9.3.4",
+    "sharp": "^0.35.3",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

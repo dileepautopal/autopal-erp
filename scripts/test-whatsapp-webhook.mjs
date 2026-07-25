@@ -74,6 +74,23 @@ const postWebhook = async (label, payload) => {
   }, null, 2))
 }
 
+const postReprocess = async (messageId) => {
+  const response = await fetch(
+    endpoint.replace(/\/webhook$/, `/messages/${encodeURIComponent(messageId)}/reprocess`),
+    { method: 'POST' },
+  )
+  const body = await response.json().catch(async () => ({
+    text: await response.text(),
+  }))
+
+  console.log(JSON.stringify({
+    label: 'reprocess failed message',
+    ok: response.ok,
+    status: response.status,
+    body,
+  }, null, 2))
+}
+
 await postWebhook(
   'valid PI-style message',
   createWebhookPayload({ messageId: validMessageId, text: validText }),
@@ -87,6 +104,12 @@ await postWebhook(
   createWebhookPayload({ messageId: invalidMessageId, text: invalidText }),
 )
 
+await new Promise((resolve) => {
+  setTimeout(resolve, Number(process.env.WHATSAPP_WEBHOOK_TEST_WAIT_MS ?? 2500))
+})
+
+await postReprocess(invalidMessageId)
+
 if (process.env.DATABASE_URL) {
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -94,6 +117,7 @@ if (process.env.DATABASE_URL) {
     const result = await pool.query(
       `
         SELECT message_id, parse_status, pi_created, COUNT(*) OVER (PARTITION BY message_id) AS duplicate_count
+             , processing_status, product_count, confidence_score, raw_payload IS NOT NULL AS has_raw_payload
         FROM tran_whatsapp_pi_messages
         WHERE message_id = ANY($1::text[])
         ORDER BY message_id
@@ -104,9 +128,13 @@ if (process.env.DATABASE_URL) {
     console.log(JSON.stringify({
       databaseRows: result.rows.map((row) => ({
         duplicate_count: Number(row.duplicate_count),
+        confidence_score: Number(row.confidence_score ?? 0),
+        has_raw_payload: Boolean(row.has_raw_payload),
         message_id: row.message_id,
         parse_status: row.parse_status,
         pi_created: row.pi_created,
+        processing_status: row.processing_status,
+        product_count: Number(row.product_count ?? 0),
       })),
     }, null, 2))
   } finally {

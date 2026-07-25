@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Button } from '../components/ui/Button'
 import { InputField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
@@ -19,7 +19,7 @@ type UserFormState = {
 
 const ADMIN_USERS_API_URL = apiUrl('/api/admin/users')
 const defaultRights = navItems
-  .filter((item) => item.id !== 'admin-panel')
+  .filter((item) => item.id !== 'admin-panel' && item.id !== 'ai-test-console')
   .map((item) => item.id)
 
 const emptyForm: UserFormState = {
@@ -113,7 +113,7 @@ export function AdminPanel({ currentUserName }: AdminPanelProps) {
     'x-autopal-user': currentUserName,
   }
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
       const response = await fetch(ADMIN_USERS_API_URL, {
         headers: {
@@ -136,11 +136,15 @@ export function AdminPanel({ currentUserName }: AdminPanelProps) {
           : 'Unable to load admin users',
       )
     }
-  }
+  }, [currentUserName])
 
   useEffect(() => {
-    void loadUsers()
-  }, [currentUserName])
+    const timer = window.setTimeout(() => {
+      void loadUsers()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [loadUsers])
 
   const toggleRight = (screenId: ScreenId) => {
     setForm((currentForm) => {
@@ -164,6 +168,7 @@ export function AdminPanel({ currentUserName }: AdminPanelProps) {
       rights:
         user.rights.length > 0
           ? user.rights.filter((right) => right !== 'admin-panel')
+              .filter((right) => right !== 'ai-test-console')
           : defaultRights,
       userName: user.userName,
     })
@@ -301,7 +306,7 @@ export function AdminPanel({ currentUserName }: AdminPanelProps) {
           </div>
           <div className="admin-rights-grid">
             {navItems
-              .filter((item) => item.id !== 'admin-panel')
+              .filter((item) => item.id !== 'admin-panel' && item.id !== 'ai-test-console')
               .map((item) => (
                 <label key={item.id}>
                   <input

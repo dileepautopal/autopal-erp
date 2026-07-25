@@ -9,6 +9,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
 import pg from 'pg'
+import { createAITestConsoleRouter } from './aiTestConsole.js'
 import { createWhatsappPIRouter } from './whatsappPi.js'
 
 const { Pool } = pg
@@ -23,6 +24,7 @@ const USER_TABLE_NAME = 'master_user'
 const USER_RIGHTS_TABLE_NAME = 'master_user_rights'
 const USER_LOGIN_LOG_TABLE_NAME = 'tran_userlog'
 const COMPANY_TABLE_NAME = 'master_company'
+const COMPANY_CATEGORY_MAPPING_TABLE_NAME = 'master_company_category_mapping'
 const PRODUCT_TABLE_NAME = 'master_products'
 const CUSTOMER_TABLE_NAME = 'master_customer'
 const COUNTRY_TABLE_NAME = 'master_country'
@@ -36,6 +38,7 @@ const RMKT_PI_MASTER_TABLE_NAME = 'master_pi_rmkt'
 const RMKT_PI_TRAN_TABLE_NAME = 'tran_pi_rmkt'
 const CUSTOMER_DUPLICATE_MESSAGE =
   'Customer with same name, address, and city already exists.'
+const AI_TEST_CONSOLE_ENABLED = process.env.ENABLE_AI_TEST_CONSOLE === 'true'
 const PUBLIC_REQUEST_LOG_PATHS = new Set([
   '/robots.txt',
   '/privacy.html',
@@ -52,9 +55,10 @@ const MENU_SCREEN_IDS = [
   'r-market-rates',
   'customer-discounts',
   'admin-panel',
+  ...(AI_TEST_CONSOLE_ENABLED ? ['ai-test-console'] : []),
 ]
 const DEFAULT_USER_SCREEN_IDS = MENU_SCREEN_IDS.filter(
-  (screenId) => screenId !== 'admin-panel',
+  (screenId) => screenId !== 'admin-panel' && screenId !== 'ai-test-console',
 )
 
 const useDatabaseSSL =
@@ -3128,6 +3132,28 @@ app.put('/api/admin/users/:userName/rights', async (request, response, next) => 
   }
 })
 
+app.use(
+  '/api/admin/ai-test-console',
+  createAITestConsoleRouter({
+    pool,
+    requireAdminUser,
+    tableNames: {
+      city: CITY_TABLE_NAME,
+      company: COMPANY_TABLE_NAME,
+      companyCategoryMapping: COMPANY_CATEGORY_MAPPING_TABLE_NAME,
+      country: COUNTRY_TABLE_NAME,
+      customer: CUSTOMER_TABLE_NAME,
+      customerDiscount: CUSTOMER_DISCOUNT_TABLE_NAME,
+      partyType: PARTY_TYPE_TABLE_NAME,
+      piMaster: RMKT_PI_MASTER_TABLE_NAME,
+      piTran: RMKT_PI_TRAN_TABLE_NAME,
+      product: PRODUCT_TABLE_NAME,
+      state: STATE_TABLE_NAME,
+      tradingRate: TRADING_RATE_TABLE_NAME,
+    },
+  }),
+)
+
 app.get('/api/master-companies', async (_request, response, next) => {
   try {
     const result = await pool.query(`
@@ -4076,10 +4102,13 @@ app.use(
     tableNames: {
       city: CITY_TABLE_NAME,
       company: COMPANY_TABLE_NAME,
+      companyCategoryMapping: COMPANY_CATEGORY_MAPPING_TABLE_NAME,
       country: COUNTRY_TABLE_NAME,
       customer: CUSTOMER_TABLE_NAME,
+      customerDiscount: CUSTOMER_DISCOUNT_TABLE_NAME,
       partyType: PARTY_TYPE_TABLE_NAME,
       piMaster: RMKT_PI_MASTER_TABLE_NAME,
+      piTran: RMKT_PI_TRAN_TABLE_NAME,
       product: PRODUCT_TABLE_NAME,
       state: STATE_TABLE_NAME,
       tradingRate: TRADING_RATE_TABLE_NAME,

@@ -10,6 +10,7 @@ export type ScreenId =
   | 'r-market-rates'
   | 'customer-discounts'
   | 'admin-panel'
+  | 'ai-test-console'
 
 export type NavItem = {
   id: ScreenId

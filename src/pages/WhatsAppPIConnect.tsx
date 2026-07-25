@@ -49,14 +49,26 @@ type ImportResult = {
 }
 
 type IncomingWhatsappMessage = {
+  confidenceScore?: number
+  errorDetails?: { errors?: string[] } | null
   id: number
   importStatus: string
+  mediaPath?: string
   messageId: string
   messageText: string
   messageType: string
+  ocrText?: string
+  parseErrors?: string[]
+  parseStatus?: string
+  parseWarnings?: string[]
+  processingStatus?: string
+  processingText?: string
+  productCount?: number
+  rawText?: string
   receivedAt: string
   senderName: string
   senderPhone: string
+  updatedAt?: string
 }
 
 type APIErrorBody = {
@@ -68,7 +80,9 @@ type APIErrorBody = {
 const STATUS_API_URL = apiUrl('/api/whatsapp-pi/status')
 const PARSE_API_URL = apiUrl('/api/whatsapp-pi/parse-text')
 const IMPORT_API_URL = apiUrl('/api/whatsapp-pi/import-text')
-const MESSAGES_API_URL = apiUrl('/api/whatsapp-pi/messages?limit=1')
+const MESSAGES_API_URL = apiUrl('/api/whatsapp-pi/messages?limit=10')
+const reprocessMessageApiUrl = (messageId: string) =>
+  apiUrl(`/api/whatsapp-pi/messages/${encodeURIComponent(messageId)}/reprocess`)
 
 const sampleMessage = [
   'Date: 20/06/2026',
@@ -115,6 +129,22 @@ const formatIncomingMessageTime = (value: string) => {
   }).format(date)
 }
 
+const getIncomingMessageErrorText = (message: IncomingWhatsappMessage) => {
+  if (message.parseErrors && message.parseErrors.length > 0) {
+    return message.parseErrors.join(' ')
+  }
+
+  if (message.errorDetails?.errors && message.errorDetails.errors.length > 0) {
+    return message.errorDetails.errors.join(' ')
+  }
+
+  if (message.parseWarnings && message.parseWarnings.length > 0) {
+    return message.parseWarnings.join(' ')
+  }
+
+  return ''
+}
+
 export function WhatsAppPIConnect({
   onImported,
   onNavigate,
@@ -129,6 +159,8 @@ export function WhatsAppPIConnect({
   const [isImporting, setIsImporting] = useState(false)
   const [latestIncomingMessage, setLatestIncomingMessage] =
     useState<IncomingWhatsappMessage | null>(null)
+  const [incomingMessages, setIncomingMessages] = useState<IncomingWhatsappMessage[]>([])
+  const [reprocessingMessageId, setReprocessingMessageId] = useState('')
   const latestIncomingMessageKeyRef = useRef('')
 
   useEffect(() => {
@@ -163,9 +195,16 @@ export function WhatsAppPIConnect({
         const body = (await response.json()) as {
           messages?: IncomingWhatsappMessage[]
         }
-        const latestMessage = body.messages?.[0]
+        const messages = body.messages ?? []
+        const latestMessage = messages[0]
 
-        if (!isActive || !latestMessage?.messageText) {
+        if (!isActive) {
+          return
+        }
+
+        setIncomingMessages(messages)
+
+        if (!latestMessage) {
           return
         }
 
@@ -173,15 +212,21 @@ export function WhatsAppPIConnect({
           latestMessage.id ||
             latestMessage.messageId ||
             latestMessage.receivedAt,
-        )
+        ) + String(latestMessage.updatedAt || '')
 
         if (!latestKey || latestKey === latestIncomingMessageKeyRef.current) {
           return
         }
 
+        const latestText =
+          latestMessage.processingText ||
+          latestMessage.messageText ||
+          latestMessage.rawText ||
+          ''
+
         latestIncomingMessageKeyRef.current = latestKey
         setLatestIncomingMessage(latestMessage)
-        setMessageText(latestMessage.messageText)
+        setMessageText(latestText)
         setParsedMessage(null)
         setImportResult(null)
         setNoticeType('success')
@@ -239,6 +284,56 @@ export function WhatsAppPIConnect({
       setIsParsing(false)
     }
   }
+
+  const reprocessMessage = async (messageId: string) => {
+    setReprocessingMessageId(messageId)
+    setNotice('')
+    setNoticeType('success')
+
+    try {
+      const response = await fetch(reprocessMessageApiUrl(messageId), {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error(await getApiErrorMessage(response))
+      }
+
+      const body = (await response.json()) as {
+        message?: IncomingWhatsappMessage
+      }
+      const updatedMessage = body.message
+
+      if (updatedMessage) {
+        setIncomingMessages((currentMessages) =>
+          currentMessages.map((message) =>
+            message.messageId === updatedMessage.messageId ? updatedMessage : message,
+          ),
+        )
+        setLatestIncomingMessage(updatedMessage)
+        setMessageText(
+          updatedMessage.processingText ||
+            updatedMessage.messageText ||
+            updatedMessage.rawText ||
+            '',
+        )
+      }
+
+      setNoticeType('success')
+      setNotice('Message reprocessed')
+    } catch (error) {
+      setNoticeType('error')
+      setNotice(error instanceof Error ? error.message : 'Unable to reprocess message')
+    } finally {
+      setReprocessingMessageId('')
+    }
+  }
+
+  const manualReviewMessages = incomingMessages.filter((message) =>
+    ['CUSTOMER_NOT_FOUND', 'FAILED', 'MANUAL_REVIEW', 'PARSE_FAILED', 'PRODUCT_NOT_FOUND'].includes(
+      message.processingStatus || message.parseStatus || '',
+    ),
+  )
 
   const importMessage = async () => {
     setIsImporting(true)
@@ -437,6 +532,56 @@ export function WhatsAppPIConnect({
           </div>
         </section>
       ) : null}
+
+      <section className="panel whatsapp-manual-review-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Review</p>
+            <h2>Manual Review</h2>
+          </div>
+        </div>
+
+        {manualReviewMessages.length > 0 ? (
+          <div className="responsive-table">
+            <table className="master-table whatsapp-review-table">
+              <thead>
+                <tr>
+                  <th>Received</th>
+                  <th>Sender</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Details</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manualReviewMessages.map((message) => (
+                  <tr key={message.messageId}>
+                    <td>{formatIncomingMessageTime(message.receivedAt) || 'Received'}</td>
+                    <td>{message.senderName || message.senderPhone || '-'}</td>
+                    <td>{message.messageType || '-'}</td>
+                    <td>{message.processingStatus || message.parseStatus || '-'}</td>
+                    <td>{getIncomingMessageErrorText(message) || '-'}</td>
+                    <td>
+                      <Button
+                        disabled={reprocessingMessageId === message.messageId}
+                        onClick={() => void reprocessMessage(message.messageId)}
+                        variant="secondary"
+                      >
+                        {reprocessingMessageId === message.messageId ? 'Reprocessing' : 'Reprocess'}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state whatsapp-empty-state">
+            <h2>No manual review messages</h2>
+          </div>
+        )}
+      </section>
     </div>
   )
 }
