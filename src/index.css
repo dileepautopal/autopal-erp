@@ -955,6 +955,150 @@ body,
   margin: 0;
 }
 
+.pi-intelligence-page {
+  max-width: 1440px;
+}
+
+.pi-intelligence-refresh-time {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.pi-intelligence-error,
+.pi-intelligence-state {
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.pi-intelligence-error {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #be123c;
+  display: grid;
+  gap: 4px;
+}
+
+.pi-intelligence-error strong,
+.pi-intelligence-error span {
+  display: block;
+}
+
+.pi-intelligence-state {
+  background: var(--autopal-saffron-soft);
+  border: 1px solid #f3d596;
+  color: #8a4c00;
+  font-weight: 900;
+}
+
+.pi-intelligence-metric {
+  min-width: 0;
+}
+
+.pi-intelligence-metric strong {
+  overflow-wrap: anywhere;
+}
+
+.pi-intelligence-content-grid {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+}
+
+.pi-intelligence-panel {
+  min-width: 0;
+}
+
+.pi-intelligence-table-wrap {
+  border: 1px solid rgba(181, 18, 27, 0.14);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.pi-intelligence-table {
+  min-width: 900px;
+}
+
+.pi-intelligence-table th,
+.pi-intelligence-table td {
+  border-bottom: 1px solid rgba(181, 18, 27, 0.12);
+  padding: 11px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.pi-intelligence-table th {
+  background: var(--autopal-red);
+  color: #fff;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.pi-intelligence-table td {
+  background: #fffdf9;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.pi-intelligence-table .numeric {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pi-intelligence-empty {
+  min-height: 170px;
+}
+
+.pi-intelligence-daily-list {
+  display: grid;
+  gap: 12px;
+}
+
+.pi-intelligence-day-row {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pi-intelligence-day-meta {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.pi-intelligence-day-meta span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.pi-intelligence-day-meta strong {
+  color: var(--autopal-red-dark);
+  font-size: 12px;
+  text-align: right;
+}
+
+.pi-intelligence-day-track {
+  background: #f4e7dd;
+  border-radius: 999px;
+  display: block;
+  height: 12px;
+  overflow: hidden;
+}
+
+.pi-intelligence-day-fill {
+  background: linear-gradient(90deg, var(--autopal-red), var(--autopal-saffron));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
 .accent-red {
   border-color: #ffc8cc;
   background: linear-gradient(135deg, #fff, var(--autopal-red-soft));
@@ -3618,6 +3762,7 @@ body,
   .ai-console-layout,
   .health-bottom-grid,
   .health-overview-grid,
+  .pi-intelligence-content-grid,
   .whatsapp-created-pi {
     grid-template-columns: 1fr;
   }
@@ -3756,6 +3901,20 @@ body,
   .ai-erp-prompts button,
   .ai-assistant-actions .btn {
     width: 100%;
+  }
+
+  .pi-intelligence-refresh-time {
+    white-space: normal;
+  }
+
+  .pi-intelligence-day-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .pi-intelligence-day-meta strong {
+    text-align: left;
   }
 
   .summary-strip,

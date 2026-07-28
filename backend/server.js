@@ -14,6 +14,7 @@ import {
   classifyERPQuestion,
   ERP_INTELLIGENCE_SCREEN_ID,
   ERP_INTENTS,
+  getPIIntelligenceDashboard,
   processERPQuestion,
   verifyERPIntelligenceAccess,
 } from './erpIntelligenceService.js'
@@ -2865,6 +2866,42 @@ app.post('/api/ai/erp', async (request, response) => {
     response.status(500).json({
       message: 'Unable to process the ERP Intelligence request.',
       mode: 'erp',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/erp/dashboard', async (request, response) => {
+  try {
+    const access = await requireERPIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    const dashboard = await getPIIntelligenceDashboard({
+      queryable: pool,
+      tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    })
+
+    console.log(
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        module: 'PI Intelligence',
+        report: 'dashboard',
+        success: true,
+        userName: access.userName,
+      }),
+    )
+
+    response.json(dashboard)
+  } catch (error) {
+    console.error('AUTOPAL ERP Intelligence dashboard failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load the PI Intelligence dashboard.',
+      module: 'PI Intelligence',
       success: false,
     })
   }

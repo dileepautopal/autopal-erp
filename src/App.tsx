@@ -13,6 +13,7 @@ import {
 } from './pages/LegalPage'
 import type { LegalPagePath } from './pages/LegalPage'
 import { LoginPage } from './pages/LoginPage'
+import { PIIntelligenceDashboard } from './pages/PIIntelligenceDashboard'
 import { PIList } from './pages/PIList'
 import { ProductMaster } from './pages/ProductMaster'
 import { RMarketProductRateMaster } from './pages/RMarketProductRateMaster'
@@ -32,6 +33,7 @@ const STATIC_LEGAL_PAGE_PATHS: Record<LegalPagePath, string> = {
 }
 const AI_TEST_CONSOLE_PATH = '/admin/ai-communication-test-console'
 const AI_ASSISTANT_PATH = '/ai-assistant'
+const PI_INTELLIGENCE_PATH = '/pi-intelligence'
 const DEFAULT_EXCLUDED_RIGHTS: ScreenId[] = [
   'admin-panel',
   'ai-test-console',
@@ -215,9 +217,22 @@ const normalizeSessionRights = (rights?: ScreenId[], isAdmin = false) => {
   return allowedRights
 }
 
+const hasScreenAccess = (session: UserSession, screen: ScreenId) =>
+  screen === 'pi-intelligence'
+    ? session.rights.includes('ai-erp-intelligence')
+    : session.rights.includes(screen)
+
+const canOpenScreen = (session: UserSession, screen: ScreenId) =>
+  hasScreenAccess(session, screen) &&
+  (screen !== 'ai-test-console' || Boolean(session.isAdmin))
+
 const getScreenPath = (screen: ScreenId) => {
   if (screen === 'ai-assistant') {
     return AI_ASSISTANT_PATH
+  }
+
+  if (screen === 'pi-intelligence') {
+    return PI_INTELLIGENCE_PATH
   }
 
   if (screen === 'ai-test-console') {
@@ -288,10 +303,9 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
   const [editingPIId, setEditingPIId] = useState<string | null>(null)
   const visibleNavItems = useMemo(
     () =>
-      navItems.filter((item) =>
-        loginSession?.rights.includes(item.id) &&
-        (item.id !== 'ai-test-console' || Boolean(loginSession?.isAdmin)),
-      ),
+      loginSession
+        ? navItems.filter((item) => canOpenScreen(loginSession, item.id))
+        : [],
     [loginSession],
   )
   const allowedScreenIds = useMemo(
@@ -489,13 +503,15 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       ...session,
       rights: normalizeSessionRights(session.rights, session.isAdmin),
     }
-    const canOpenInitialScreen = normalizedSession.rights.includes(initialScreen)
-      && (initialScreen !== 'ai-test-console' || normalizedSession.isAdmin)
+    const canOpenInitialScreen = canOpenScreen(normalizedSession, initialScreen)
+    const fallbackScreen =
+      navItems.find((item) => canOpenScreen(normalizedSession, item.id))?.id ??
+      'dashboard'
     const nextScreen = canOpenInitialScreen
       ? initialScreen
       : normalizedSession.rights.includes('dashboard')
         ? 'dashboard'
-        : normalizedSession.rights[0] ?? 'dashboard'
+        : fallbackScreen
 
     setLoginSession(normalizedSession)
     setActiveScreen(nextScreen)
@@ -568,6 +584,9 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
           currentUserName={loginSession.userName}
         />
       )}
+      {currentScreen === 'pi-intelligence' && (
+        <PIIntelligenceDashboard currentUserName={loginSession.userName} />
+      )}
       {currentScreen === 'admin-panel' && (
         <AdminPanel currentUserName={loginSession.userName} />
       )}
@@ -600,6 +619,10 @@ function App() {
 
   if (currentPath === AI_ASSISTANT_PATH) {
     return <AuthenticatedApp initialScreen="ai-assistant" />
+  }
+
+  if (currentPath === PI_INTELLIGENCE_PATH) {
+    return <AuthenticatedApp initialScreen="pi-intelligence" />
   }
 
   if (isLegalPagePath(currentPath)) {

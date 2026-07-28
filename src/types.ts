@@ -10,6 +10,7 @@ export type ScreenId =
   | 'r-market-rates'
   | 'customer-discounts'
   | 'ai-assistant'
+  | 'pi-intelligence'
   | 'ai-erp-intelligence'
   | 'admin-panel'
   | 'ai-test-console'

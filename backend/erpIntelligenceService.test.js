@@ -4,6 +4,7 @@ import {
   classifyERPQuestion,
   ERP_INTELLIGENCE_SCREEN_ID,
   ERP_INTENTS,
+  getPIIntelligenceDashboard,
   getLatestPIs,
   getPICountForDateRange,
   getPIValueForDateRange,
@@ -28,6 +29,51 @@ const createMockQueryable = (handler) => {
 const noModel = async () => {
   throw new Error('Ollama disabled in unit test')
 }
+
+const createDashboardMockQueryable = ({
+  dailyRows = [],
+  latestRows = [],
+  monthCount = 0,
+  monthValue = 0,
+  statusRows = [],
+  todayCount = 0,
+  todayValue = 0,
+} = {}) =>
+  createMockQueryable((sql, params) => {
+    if (sql.includes('GROUP BY m.pi_date::date')) {
+      return { rows: dailyRows }
+    }
+
+    if (sql.includes("m.pi_series || LPAD")) {
+      return { rows: latestRows }
+    }
+
+    if (sql.includes("CASE WHEN m.close_yn = 'Y' THEN 'Final' ELSE 'Draft' END")) {
+      return { rows: statusRows }
+    }
+
+    if (sql.includes('COUNT(*)::int AS count')) {
+      return {
+        rows: [
+          {
+            count: params[0] === '2026-07-28' ? todayCount : monthCount,
+          },
+        ],
+      }
+    }
+
+    if (sql.includes('COALESCE(SUM(m.grand_total), 0)::numeric AS total_value')) {
+      return {
+        rows: [
+          {
+            total_value: params[0] === '2026-07-28' ? todayValue : monthValue,
+          },
+        ],
+      }
+    }
+
+    throw new Error(`Unexpected dashboard query: ${sql}`)
+  })
 
 test('PI count today query returns the verified count', async () => {
   const queryable = createMockQueryable(() => ({
@@ -309,4 +355,196 @@ test('new PI count function uses no mutation SQL', async () => {
     queryable.queries[0].sql,
     /\b(INSERT|UPDATE|DELETE|ALTER|DROP|TRUNCATE|CREATE)\b/i,
   )
+})
+
+test('dashboard response shape contains summary, latest PIs and daily summary', async () => {
+  const queryable = createDashboardMockQueryable({
+    dailyRows: [
+      {
+        count: 2,
+        pi_date: '2026-07-28',
+        total_value: '1500.50',
+      },
+    ],
+    latestRows: [
+      {
+        company_name: 'Autolite Manufacturing Limited',
+        customer_name: 'Jalaram Enterprise',
+        grand_total: '99.25',
+        pi_date: '2026-07-28',
+        pi_number: 'AML-0012',
+        status: 'Draft',
+      },
+    ],
+    monthCount: 8,
+    monthValue: '4500',
+    statusRows: [
+      { count: 6, status: 'Draft', total_value: '3000' },
+      { count: 2, status: 'Final', total_value: '1500' },
+    ],
+    todayCount: 2,
+    todayValue: '1500.50',
+  })
+
+  const result = await getPIIntelligenceDashboard({
+    queryable,
+    today: '2026-07-28',
+  })
+
+  assert.equal(result.success, true)
+  assert.equal(result.module, 'PI Intelligence')
+  assert.equal(result.timezone, 'Asia/Kolkata')
+  assert.deepEqual(result.summary.today, {
+    count: 2,
+    value: 1500.5,
+  })
+  assert.deepEqual(result.summary.month, {
+    count: 8,
+    value: 4500,
+  })
+  assert.equal(result.latestPIs[0].piNumber, 'AML-0012')
+  assert.equal(result.latestPIs[0].grandTotal, 99.25)
+  assert.deepEqual(result.dailySummary[0], {
+    count: 2,
+    date: '2026-07-28',
+    value: 1500.5,
+  })
+})
+
+test('dashboard null totals become zero', async () => {
+  const queryable = createDashboardMockQueryable({
+    dailyRows: [
+      {
+        count: null,
+        pi_date: '2026-07-28',
+        total_value: null,
+      },
+    ],
+    latestRows: [
+      {
+        company_name: null,
+        customer_name: null,
+        grand_total: null,
+        pi_date: null,
+        pi_number: null,
+        status: null,
+      },
+    ],
+    monthValue: null,
+    statusRows: [{ count: null, status: 'Draft', total_value: null }],
+    todayValue: null,
+  })
+
+  const result = await getPIIntelligenceDashboard({
+    queryable,
+    today: '2026-07-28',
+  })
+
+  assert.deepEqual(result.summary.today, {
+    count: 0,
+    value: 0,
+  })
+  assert.deepEqual(result.summary.month, {
+    count: 0,
+    value: 0,
+  })
+  assert.deepEqual(result.summary.open, {
+    count: 0,
+    value: 0,
+  })
+  assert.equal(result.summary.final.value, 0)
+  assert.equal(result.latestPIs[0].grandTotal, 0)
+  assert.equal(result.dailySummary[0].value, 0)
+})
+
+test('dashboard latest PI list is limited to 10 rows', async () => {
+  const latestRows = Array.from({ length: 12 }, (_item, index) => ({
+    company_name: 'Autolite Manufacturing Limited',
+    customer_name: `Customer ${index + 1}`,
+    grand_total: String(index + 1),
+    pi_date: '2026-07-28',
+    pi_number: `AML-${String(index + 1).padStart(4, '0')}`,
+    status: 'Draft',
+  }))
+  const queryable = createDashboardMockQueryable({ latestRows })
+
+  const result = await getPIIntelligenceDashboard({
+    queryable,
+    today: '2026-07-28',
+  })
+  const latestQuery = queryable.queries.find((query) =>
+    query.sql.includes("m.pi_series || LPAD"),
+  )
+
+  assert.equal(result.latestPIs.length, 10)
+  assert.equal(latestQuery.params[0], 10)
+})
+
+test('dashboard maps Draft status to open and Final status to final', async () => {
+  const queryable = createDashboardMockQueryable({
+    statusRows: [
+      { count: 11, status: 'Draft', total_value: '25000' },
+      { count: 3, status: 'Final', total_value: '9000' },
+    ],
+  })
+
+  const result = await getPIIntelligenceDashboard({
+    queryable,
+    today: '2026-07-28',
+  })
+
+  assert.deepEqual(result.summary.open, {
+    count: 11,
+    value: 25000,
+  })
+  assert.deepEqual(result.summary.final, {
+    count: 3,
+    value: 9000,
+  })
+})
+
+test('dashboard unauthorised request is rejected before reporting', async () => {
+  const queryable = createMockQueryable(() => {
+    throw new Error('Dashboard must not query data without a user name')
+  })
+
+  const result = await verifyERPIntelligenceAccess({
+    queryable,
+    userName: '',
+  })
+
+  assert.equal(result.authorized, false)
+})
+
+test('dashboard database errors are surfaced for route error handling', async () => {
+  const queryable = createMockQueryable(() => {
+    throw new Error('database unavailable')
+  })
+
+  await assert.rejects(
+    () =>
+      getPIIntelligenceDashboard({
+        queryable,
+        today: '2026-07-28',
+      }),
+    /database unavailable/,
+  )
+})
+
+test('dashboard functions use fixed read-only SELECT queries', async () => {
+  const queryable = createDashboardMockQueryable()
+
+  await getPIIntelligenceDashboard({
+    queryable,
+    today: '2026-07-28',
+  })
+
+  assert.equal(queryable.queries.length, 7)
+  queryable.queries.forEach((query) => {
+    assert.match(query.sql.trim(), /^SELECT/i)
+    assert.doesNotMatch(
+      query.sql,
+      /\b(INSERT|UPDATE|DELETE|ALTER|DROP|TRUNCATE|CREATE)\b/i,
+    )
+  })
 })

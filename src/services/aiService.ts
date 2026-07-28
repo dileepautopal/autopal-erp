@@ -1,6 +1,7 @@
 import { apiUrl } from '../config/api'
 
 const AI_ASK_URL = apiUrl('/api/ai/ask')
+const AI_ERP_DASHBOARD_URL = apiUrl('/api/ai/erp/dashboard')
 const AI_HEALTH_URL = apiUrl('/api/ai/health')
 const REQUEST_TIMEOUT_MS = 150_000
 
@@ -64,6 +65,42 @@ export type AIHealthResponse = {
   running?: boolean
   baseUrl?: string
   model?: string
+  message?: string
+}
+
+export type PIIntelligenceMetric = {
+  count: number
+  value: number
+}
+
+export type PIIntelligenceLatestPI = {
+  companyName?: string
+  customerName?: string
+  grandTotal?: number
+  piDate?: string
+  piNumber?: string
+  status?: string
+}
+
+export type PIIntelligenceDailySummary = {
+  count: number
+  date: string
+  value: number
+}
+
+export type PIIntelligenceDashboardResponse = {
+  success: boolean
+  module?: string
+  generatedAt?: string
+  timezone?: string
+  summary?: {
+    today?: PIIntelligenceMetric
+    month?: PIIntelligenceMetric
+    open?: PIIntelligenceMetric
+    final?: PIIntelligenceMetric
+  }
+  latestPIs?: PIIntelligenceLatestPI[]
+  dailySummary?: PIIntelligenceDailySummary[]
   message?: string
 }
 
@@ -175,6 +212,50 @@ export const checkAIHealth = async (): Promise<AIHealthResponse> => {
       running: false,
       message: 'Local AI is unavailable. Please confirm that Ollama is running.',
     }
+  } finally {
+    timeout.clear()
+  }
+}
+
+export const getPIIntelligenceDashboard = async (
+  options: AskAIOptions = {},
+): Promise<PIIntelligenceDashboardResponse> => {
+  const timeout = withTimeout()
+  const headers: Record<string, string> = {}
+
+  if (options.userName) {
+    headers['x-autopal-user'] = options.userName
+  }
+
+  try {
+    const response = await fetch(AI_ERP_DASHBOARD_URL, {
+      headers,
+      method: 'GET',
+      signal: timeout.signal,
+    })
+    const body = await parseJsonResponse<PIIntelligenceDashboardResponse>(
+      response,
+    )
+
+    if (!response.ok) {
+      throw new Error(body.message || 'Unable to load the PI Intelligence dashboard.')
+    }
+
+    return body
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('PI Intelligence dashboard request timed out.', {
+        cause: error,
+      })
+    }
+
+    if (error instanceof TypeError) {
+      throw new Error('PI Intelligence dashboard is unavailable.', {
+        cause: error,
+      })
+    }
+
+    throw error
   } finally {
     timeout.clear()
   }

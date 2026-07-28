@@ -23,6 +23,7 @@ export const navItems: NavItem[] = [
   { id: 'r-market-rates', label: 'R.Market Rates', meta: 'Trading rates' },
   { id: 'customer-discounts', label: 'Customer Discounts', meta: 'Scheme master' },
   { id: 'ai-assistant', label: 'AI Assistant', meta: 'Business drafts' },
+  { id: 'pi-intelligence', label: 'PI Intelligence', meta: 'Live PI dashboard' },
   { id: 'admin-panel', label: 'Admin Panel', meta: 'Users & rights' },
   ...(isAITestConsoleEnabled
     ? [
@@ -36,7 +37,7 @@ export const navItems: NavItem[] = [
 ]
 
 export const rightItems: NavItem[] = [
-  ...navItems,
+  ...navItems.filter((item) => item.id !== 'pi-intelligence'),
   {
     id: 'ai-erp-intelligence',
     label: 'AI ERP Intelligence',

@@ -738,6 +738,33 @@ const mapPIListRow = (row) => ({
   value: toNumber(row.grand_total),
 })
 
+const getStatusSummaryRow = (rows, status) =>
+  rows.find((row) => row.status === status) ?? {
+    count: 0,
+    status,
+    totalValue: 0,
+  }
+
+const mapDashboardSummary = (summary) => ({
+  count: toNumber(summary?.count),
+  value: toNumber(summary?.totalValue),
+})
+
+const mapDashboardLatestPI = (row) => ({
+  companyName: row.companyName ?? '',
+  customerName: row.customerName ?? '',
+  grandTotal: toNumber(row.value),
+  piDate: row.piDate ?? '',
+  piNumber: row.piNumber ?? '',
+  status: row.status ?? '',
+})
+
+const mapDashboardDailySummary = (row) => ({
+  count: toNumber(row.count),
+  date: row.date ?? '',
+  value: toNumber(row.totalValue),
+})
+
 const findCustomerMatches = async ({ customerName, queryable, tableNames }) => {
   const tables = normalizeTables(tableNames)
   const search = toText(customerName)
@@ -1279,6 +1306,75 @@ const buildERPSource = () => ({
   module: ERP_MODULE,
   timezone: INDIA_TIME_ZONE,
 })
+
+export const getPIIntelligenceDashboard = async ({
+  queryable,
+  tableNames,
+  today = getIndiaDateString(),
+}) => {
+  const todayRange = getTodayRange(today)
+  const monthRange = getMonthRange(today)
+
+  if (!monthRange) {
+    throw new Error('Unable to calculate the current Indian business month.')
+  }
+
+  const [
+    todaySummary,
+    monthSummary,
+    statusSummary,
+    latestPIResult,
+    dailySummary,
+  ] = await Promise.all([
+    getPISummaryForDateRange({
+      endDate: todayRange.endDate,
+      queryable,
+      startDate: todayRange.startDate,
+      tableNames,
+    }),
+    getPISummaryForDateRange({
+      endDate: monthRange.endDate,
+      queryable,
+      startDate: monthRange.startDate,
+      tableNames,
+    }),
+    getPIStatusSummary({
+      queryable,
+      tableNames,
+    }),
+    getLatestPIs({
+      limit: DEFAULT_LATEST_LIMIT,
+      queryable,
+      tableNames,
+    }),
+    getPIDailySummary({
+      endDate: monthRange.endDate,
+      queryable,
+      startDate: monthRange.startDate,
+      tableNames,
+    }),
+  ])
+
+  const openSummary = getStatusSummaryRow(statusSummary.rows, 'Draft')
+  const finalSummary = getStatusSummaryRow(statusSummary.rows, 'Final')
+
+  return {
+    dailySummary: dailySummary.rows.map(mapDashboardDailySummary),
+    generatedAt: new Date().toISOString(),
+    latestPIs: latestPIResult.rows
+      .slice(0, DEFAULT_LATEST_LIMIT)
+      .map(mapDashboardLatestPI),
+    module: ERP_MODULE,
+    success: true,
+    summary: {
+      final: mapDashboardSummary(finalSummary),
+      month: mapDashboardSummary(monthSummary),
+      open: mapDashboardSummary(openSummary),
+      today: mapDashboardSummary(todaySummary),
+    },
+    timezone: INDIA_TIME_ZONE,
+  }
+}
 
 export const verifyERPIntelligenceAccess = async ({
   queryable,
