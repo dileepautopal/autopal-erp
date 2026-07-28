@@ -35,6 +35,15 @@ export const navItems: NavItem[] = [
     : []),
 ]
 
+export const rightItems: NavItem[] = [
+  ...navItems,
+  {
+    id: 'ai-erp-intelligence',
+    label: 'AI ERP Intelligence',
+    meta: 'Live PI reports',
+  },
+]
+
 export const companies: Company[] = [
   {
     compCode: 1,

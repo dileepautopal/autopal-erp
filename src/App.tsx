@@ -18,7 +18,7 @@ import { ProductMaster } from './pages/ProductMaster'
 import { RMarketProductRateMaster } from './pages/RMarketProductRateMaster'
 import { WhatsAppPIConnect } from './pages/WhatsAppPIConnect'
 import { apiUrl } from './config/api'
-import { isAITestConsoleEnabled, navItems } from './data/mockData'
+import { isAITestConsoleEnabled, navItems, rightItems } from './data/mockData'
 import { initialPIForm } from './data/piDefaults'
 import type { Company, PIFormState, SavedPI, ScreenId, UserSession } from './types'
 
@@ -32,9 +32,14 @@ const STATIC_LEGAL_PAGE_PATHS: Record<LegalPagePath, string> = {
 }
 const AI_TEST_CONSOLE_PATH = '/admin/ai-communication-test-console'
 const AI_ASSISTANT_PATH = '/ai-assistant'
+const DEFAULT_EXCLUDED_RIGHTS: ScreenId[] = [
+  'admin-panel',
+  'ai-test-console',
+  'ai-erp-intelligence',
+]
 const getDefaultRights = (isAdmin = false) =>
-  navItems
-    .filter((item) => isAdmin || item.id !== 'admin-panel')
+  rightItems
+    .filter((item) => isAdmin || !DEFAULT_EXCLUDED_RIGHTS.includes(item.id))
     .map((item) => item.id)
 
 type APIRecord = Record<string, unknown>
@@ -202,7 +207,7 @@ const normalizeSessionRights = (rights?: ScreenId[], isAdmin = false) => {
 
   const allowedRights = rights.filter(
     (right) =>
-      navItems.some((item) => item.id === right) &&
+      rightItems.some((item) => item.id === right) &&
       right !== 'admin-panel' &&
       right !== 'ai-test-console',
   )
@@ -555,7 +560,14 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       {currentScreen === 'products' && <ProductMaster />}
       {currentScreen === 'r-market-rates' && <RMarketProductRateMaster />}
       {currentScreen === 'customer-discounts' && <CustomerDiscountMaster />}
-      {currentScreen === 'ai-assistant' && <AIAssistantPage />}
+      {currentScreen === 'ai-assistant' && (
+        <AIAssistantPage
+          canUseERPIntelligence={loginSession.rights.includes(
+            'ai-erp-intelligence',
+          )}
+          currentUserName={loginSession.userName}
+        />
+      )}
       {currentScreen === 'admin-panel' && (
         <AdminPanel currentUserName={loginSession.userName} />
       )}

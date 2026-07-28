@@ -2447,6 +2447,51 @@ body,
   border-color: rgba(181, 18, 27, 0.32);
 }
 
+.ai-erp-prompts {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ai-erp-prompts > div {
+  flex: 1 1 100%;
+}
+
+.ai-erp-prompts strong,
+.ai-erp-prompts span {
+  display: block;
+}
+
+.ai-erp-prompts strong {
+  color: var(--autopal-red-dark);
+  font-size: 0.88rem;
+}
+
+.ai-erp-prompts span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+  margin-top: 2px;
+}
+
+.ai-erp-prompts button {
+  background: #fff;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  border-radius: 999px;
+  color: #7c2d12;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 9px 12px;
+}
+
+.ai-erp-prompts button:not(:disabled):hover {
+  background: var(--autopal-saffron-soft);
+}
+
 .ai-assistant-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2539,6 +2584,70 @@ body,
   font-size: 0.86rem;
   font-weight: 750;
   margin: 12px 0 0;
+}
+
+.ai-live-data-pill {
+  background: #ecfdf3;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  color: #047857;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.ai-erp-source {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 10px;
+}
+
+.ai-erp-table-wrap {
+  border: 1px solid rgba(181, 18, 27, 0.14);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.ai-erp-table {
+  min-width: 680px;
+}
+
+.ai-erp-table th,
+.ai-erp-table td {
+  border-bottom: 1px solid rgba(181, 18, 27, 0.12);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.ai-erp-table th {
+  background: var(--autopal-red);
+  color: #fff;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.ai-erp-table td {
+  background: #fffdf9;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.ai-erp-clarification {
+  background: #fff7ed;
+  border: 1px solid rgba(234, 88, 12, 0.22);
+  border-radius: 8px;
+  color: #7c2d12;
+  padding: 12px 14px;
+}
+
+.ai-erp-clarification ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
 }
 
 .ai-console-layout {
@@ -3644,6 +3753,7 @@ body,
   }
 
   .ai-suggested-prompts button,
+  .ai-erp-prompts button,
   .ai-assistant-actions .btn {
     width: 100%;
   }

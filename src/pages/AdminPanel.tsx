@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Button } from '../components/ui/Button'
 import { InputField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
-import { navItems } from '../data/mockData'
+import { navItems, rightItems } from '../data/mockData'
 import type { ScreenId, UserAccess } from '../types'
 
 type AdminPanelProps = {
@@ -18,8 +18,13 @@ type UserFormState = {
 }
 
 const ADMIN_USERS_API_URL = apiUrl('/api/admin/users')
-const defaultRights = navItems
-  .filter((item) => item.id !== 'admin-panel' && item.id !== 'ai-test-console')
+const defaultRights = rightItems
+  .filter(
+    (item) =>
+      item.id !== 'admin-panel' &&
+      item.id !== 'ai-test-console' &&
+      item.id !== 'ai-erp-intelligence',
+  )
   .map((item) => item.id)
 
 const emptyForm: UserFormState = {
@@ -305,7 +310,7 @@ export function AdminPanel({ currentUserName }: AdminPanelProps) {
             <span>{rightsSummary}</span>
           </div>
           <div className="admin-rights-grid">
-            {navItems
+            {rightItems
               .filter((item) => item.id !== 'admin-panel' && item.id !== 'ai-test-console')
               .map((item) => (
                 <label key={item.id}>
@@ -384,6 +389,8 @@ export function AdminPanel({ currentUserName }: AdminPanelProps) {
                                 .map(
                                   (right) =>
                                     navItems.find((item) => item.id === right)
+                                      ?.label ??
+                                    rightItems.find((item) => item.id === right)
                                       ?.label ?? right,
                                 )
                                 .join(', ') || '-'}

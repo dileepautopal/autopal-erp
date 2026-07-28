@@ -1,13 +1,22 @@
 import { apiUrl } from '../config/api'
 
-const AI_CHAT_URL = apiUrl('/api/ai/chat')
+const AI_ASK_URL = apiUrl('/api/ai/ask')
 const AI_HEALTH_URL = apiUrl('/api/ai/health')
 const REQUEST_TIMEOUT_MS = 150_000
 
 export type AIChatResponse = {
   success: boolean
+  mode?: 'general' | 'erp'
+  intent?: string
   answer?: string
+  data?: AIERPData
   model?: string
+  source?: {
+    generatedAt?: string
+    liveData?: boolean
+    module?: string
+    timezone?: string
+  }
   usage?: {
     promptTokens?: number
     responseTokens?: number
@@ -17,6 +26,36 @@ export type AIChatResponse = {
     loadDurationNanoseconds?: number
   }
   message?: string
+  wordingMode?: string
+}
+
+export type AIERPRow = {
+  companyName?: string
+  count?: number
+  customerName?: string
+  date?: string
+  piDate?: string
+  piNumber?: string
+  status?: string
+  totalValue?: number
+  value?: number
+}
+
+export type AIERPData = {
+  companyName?: string
+  count?: number
+  customerName?: string
+  endDate?: string
+  limit?: number
+  matches?: string[]
+  rows?: AIERPRow[]
+  startDate?: string
+  status?: string
+  totalValue?: number
+}
+
+type AskAIOptions = {
+  userName?: string
 }
 
 export type AIHealthResponse = {
@@ -58,15 +97,23 @@ const getFriendlyErrorMessage = (status: number, message?: string) => {
   return message || 'The AI request could not be completed.'
 }
 
-export const askAI = async (question: string): Promise<AIChatResponse> => {
+export const askAI = async (
+  question: string,
+  options: AskAIOptions = {},
+): Promise<AIChatResponse> => {
   const timeout = withTimeout()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+
+  if (options.userName) {
+    headers['x-autopal-user'] = options.userName
+  }
 
   try {
-    const response = await fetch(AI_CHAT_URL, {
+    const response = await fetch(AI_ASK_URL, {
       body: JSON.stringify({ question }),
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       method: 'POST',
       signal: timeout.signal,
     })

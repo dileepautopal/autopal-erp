@@ -12,6 +12,7 @@ import {
   askAI,
   checkAIHealth,
   type AIChatResponse,
+  type AIERPRow,
   type AIHealthResponse,
 } from '../services/aiService'
 
@@ -40,7 +41,20 @@ const suggestedPrompts = [
   },
 ]
 
+const suggestedERPPrompts = [
+  'How many PIs were generated today?',
+  "What is this month's PI value?",
+  'Show pending PI summary',
+  'Show the latest PIs',
+  'Show PI summary for this month',
+]
+
 type HealthStatus = 'checking' | 'ready' | 'unavailable'
+
+type AIAssistantPageProps = {
+  canUseERPIntelligence: boolean
+  currentUserName: string
+}
 
 const getHealthLabel = (status: HealthStatus) => {
   if (status === 'checking') {
@@ -54,7 +68,77 @@ const getHealthLabel = (status: HealthStatus) => {
   return 'Local AI unavailable'
 }
 
-export function AIAssistantPage() {
+const formatERPDateTime = (value?: string) => {
+  if (!value) {
+    return '-'
+  }
+
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(date)
+}
+
+const formatERPValue = (value?: number) =>
+  new Intl.NumberFormat('en-IN', {
+    currency: 'INR',
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+    style: 'currency',
+  }).format(Number(value ?? 0))
+
+const getERPTableColumns = (rows: AIERPRow[]) => {
+  if (rows.some((row) => row.piNumber)) {
+    return [
+      ['piNumber', 'PI Number'],
+      ['piDate', 'Date'],
+      ['customerName', 'Customer'],
+      ['companyName', 'Company'],
+      ['status', 'Status'],
+      ['value', 'Value'],
+    ] as const
+  }
+
+  if (rows.some((row) => row.date)) {
+    return [
+      ['date', 'Date'],
+      ['count', 'PI Count'],
+      ['totalValue', 'Value'],
+    ] as const
+  }
+
+  return [
+    ['status', 'Status'],
+    ['count', 'PI Count'],
+    ['totalValue', 'Value'],
+  ] as const
+}
+
+const renderERPCell = (row: AIERPRow, key: keyof AIERPRow) => {
+  if (key === 'value' || key === 'totalValue') {
+    return formatERPValue(row[key])
+  }
+
+  if (key === 'count') {
+    return new Intl.NumberFormat('en-IN').format(Number(row.count ?? 0))
+  }
+
+  return String(row[key] ?? '-')
+}
+
+export function AIAssistantPage({
+  canUseERPIntelligence,
+  currentUserName,
+}: AIAssistantPageProps) {
   const [question, setQuestion] = useState('')
   const [result, setResult] = useState<AIChatResponse | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
@@ -68,6 +152,8 @@ export function AIAssistantPage() {
   const canSubmit = Boolean(trimmedQuestion) && !isQuestionTooLong && !isLoading
 
   const answer = useMemo(() => String(result?.answer ?? '').trim(), [result])
+  const erpRows = Array.isArray(result?.data?.rows) ? result.data.rows : []
+  const erpColumns = getERPTableColumns(erpRows)
 
   const loadHealth = useCallback(async () => {
     setHealthStatus('checking')
@@ -105,7 +191,9 @@ export function AIAssistantPage() {
     setResult(null)
 
     try {
-      const response = await askAI(trimmedQuestion)
+      const response = await askAI(trimmedQuestion, {
+        userName: currentUserName,
+      })
 
       if (!response.success) {
         throw new Error(response.message || 'The AI request could not be completed.')
@@ -168,11 +256,13 @@ export function AIAssistantPage() {
       </header>
 
       <section className="ai-assistant-notice">
-        <strong>Phase 3 notice:</strong>
+        <strong>Phase 4 notice:</strong>
         <span>
-          This AI does not currently access live AUTOPAL ERP data, stock, prices,
-          balances or customer records. Review answers before use and do not enter
-          passwords, bank details or highly sensitive personal data.
+          General AI drafting does not access live ERP data. Authorised PI
+          Intelligence questions use limited read-only live PI data only. Stock,
+          balances and customer records are not connected. Review answers before
+          use and do not enter passwords, bank details or highly sensitive
+          personal data.
         </span>
       </section>
 
@@ -222,6 +312,27 @@ export function AIAssistantPage() {
             ))}
           </div>
 
+          <div className="ai-erp-prompts" aria-label="ERP Intelligence prompts">
+            <div>
+              <strong>PI Intelligence</strong>
+              <span>
+                {canUseERPIntelligence
+                  ? 'Live read-only PI reports'
+                  : 'Ask admin to grant AI ERP Intelligence access'}
+              </span>
+            </div>
+            {suggestedERPPrompts.map((prompt) => (
+              <button
+                disabled={isLoading || !canUseERPIntelligence}
+                key={prompt}
+                onClick={() => selectSuggestedPrompt(prompt)}
+                type="button"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
           <div className="ai-assistant-actions">
             <Button disabled={!canSubmit} type="submit">
               {isLoading ? 'Thinking...' : 'Ask AI'}
@@ -240,6 +351,9 @@ export function AIAssistantPage() {
             </div>
             {result?.model ? (
               <span className="status-pill">{result.model}</span>
+            ) : null}
+            {result?.source?.liveData ? (
+              <span className="ai-live-data-pill">Live ERP data</span>
             ) : null}
           </div>
 
@@ -260,6 +374,47 @@ export function AIAssistantPage() {
           ) : null}
 
           {answer ? <div className="ai-answer-content">{answer}</div> : null}
+
+          {result?.source?.liveData ? (
+            <div className="ai-erp-source">
+              <span>{result.source.module ?? 'ERP Intelligence'}</span>
+              <span>{formatERPDateTime(result.source.generatedAt)}</span>
+            </div>
+          ) : null}
+
+          {erpRows.length > 0 ? (
+            <div className="ai-erp-table-wrap">
+              <table className="ai-erp-table">
+                <thead>
+                  <tr>
+                    {erpColumns.map((column) => (
+                      <th key={column[0]}>{column[1]}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {erpRows.map((row, index) => (
+                    <tr key={`${row.piNumber ?? row.date ?? row.status ?? 'row'}-${index}`}>
+                      {erpColumns.map((column) => (
+                        <td key={column[0]}>{renderERPCell(row, column[0])}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {Array.isArray(result?.data?.matches) && result.data.matches.length > 0 ? (
+            <div className="ai-erp-clarification">
+              <strong>Matching names</strong>
+              <ul>
+                {result.data.matches.map((match) => (
+                  <li key={match}>{match}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           {result?.usage ? (
             <details className="ai-response-stats">

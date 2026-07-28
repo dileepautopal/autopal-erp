@@ -11,6 +11,13 @@ import express from 'express'
 import pg from 'pg'
 import { createAITestConsoleRouter } from './aiTestConsole.js'
 import {
+  classifyERPQuestion,
+  ERP_INTELLIGENCE_SCREEN_ID,
+  ERP_INTENTS,
+  processERPQuestion,
+  verifyERPIntelligenceAccess,
+} from './erpIntelligenceService.js'
+import {
   askOllama,
   checkOllamaHealth,
 } from './ollamaService.js'
@@ -40,6 +47,13 @@ const TRADING_RATE_TABLE_NAME = 'master_trading_product_rate'
 const CUSTOMER_DISCOUNT_TABLE_NAME = 'master_cust_discount'
 const RMKT_PI_MASTER_TABLE_NAME = 'master_pi_rmkt'
 const RMKT_PI_TRAN_TABLE_NAME = 'tran_pi_rmkt'
+const ERP_INTELLIGENCE_TABLE_NAMES = {
+  company: COMPANY_TABLE_NAME,
+  customer: CUSTOMER_TABLE_NAME,
+  piMaster: RMKT_PI_MASTER_TABLE_NAME,
+  user: USER_TABLE_NAME,
+  userRights: USER_RIGHTS_TABLE_NAME,
+}
 const CUSTOMER_DUPLICATE_MESSAGE =
   'Customer with same name, address, and city already exists.'
 const AI_TEST_CONSOLE_ENABLED = process.env.ENABLE_AI_TEST_CONSOLE === 'true'
@@ -80,11 +94,18 @@ const MENU_SCREEN_IDS = [
   'r-market-rates',
   'customer-discounts',
   'ai-assistant',
+  ERP_INTELLIGENCE_SCREEN_ID,
   'admin-panel',
   ...(AI_TEST_CONSOLE_ENABLED ? ['ai-test-console'] : []),
 ]
-const DEFAULT_USER_SCREEN_IDS = MENU_SCREEN_IDS.filter(
+const USER_ASSIGNABLE_SCREEN_IDS = MENU_SCREEN_IDS.filter(
   (screenId) => screenId !== 'admin-panel' && screenId !== 'ai-test-console',
+)
+const DEFAULT_USER_SCREEN_IDS = MENU_SCREEN_IDS.filter(
+  (screenId) =>
+    screenId !== 'admin-panel' &&
+    screenId !== 'ai-test-console' &&
+    screenId !== ERP_INTELLIGENCE_SCREEN_ID,
 )
 
 const useDatabaseSSL =
@@ -655,7 +676,7 @@ const saveUserRights = async (userName, rights = [], queryable = pool) => {
     [userName],
   )
 
-  for (const screenId of DEFAULT_USER_SCREEN_IDS) {
+  for (const screenId of USER_ASSIGNABLE_SCREEN_IDS) {
     await queryable.query(
       `
         INSERT INTO ${USER_RIGHTS_TABLE_NAME}
@@ -2768,6 +2789,135 @@ app.post('/api/ai/chat', async (request, response) => {
     }
 
     console.error('AUTOPAL Local AI chat failed', {
+      message: error?.message,
+    })
+
+    response.status(500).json({
+      success: false,
+      message: 'Unable to process the AI request.',
+    })
+  }
+})
+
+const getERPRequestUserName = (request) =>
+  String(request.get('x-autopal-user') ?? '').trim()
+
+const requireERPIntelligenceUser = async (request, response) => {
+  await ensureUserAdministrationSchema()
+  const access = await verifyERPIntelligenceAccess({
+    queryable: pool,
+    tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    userName: getERPRequestUserName(request),
+  })
+
+  if (!access.authorized) {
+    response.status(403).json({
+      message: access.message || 'AI ERP Intelligence access is required.',
+      mode: 'erp',
+      success: false,
+    })
+    return null
+  }
+
+  return access
+}
+
+const sendERPIntelligenceResult = (response, result) => {
+  response.status(result.statusCode ?? (result.success ? 200 : 422)).json({
+    ...result,
+    statusCode: undefined,
+  })
+}
+
+const runERPIntelligenceRequest = async (request, response) => {
+  const access = await requireERPIntelligenceUser(request, response)
+
+  if (!access) {
+    return
+  }
+
+  const result = await processERPQuestion({
+    queryable: pool,
+    question: request.body?.question,
+    tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+  })
+
+  console.log(
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      module: 'PI Intelligence',
+      intent: result.intent ?? '',
+      success: Boolean(result.success),
+      userName: access.userName,
+    }),
+  )
+
+  sendERPIntelligenceResult(response, result)
+}
+
+app.post('/api/ai/erp', async (request, response) => {
+  try {
+    await runERPIntelligenceRequest(request, response)
+  } catch (error) {
+    console.error('AUTOPAL ERP Intelligence failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to process the ERP Intelligence request.',
+      mode: 'erp',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/ask', async (request, response) => {
+  try {
+    const classification = classifyERPQuestion(request.body?.question)
+
+    if (classification.intent !== ERP_INTENTS.GENERAL_AI_QUESTION) {
+      await runERPIntelligenceRequest(request, response)
+      return
+    }
+
+    const result = await askOllama({
+      question: request.body?.question,
+      systemPrompt: AUTOPAL_AI_SYSTEM_PROMPT,
+    })
+
+    response.json({
+      success: true,
+      mode: 'general',
+      answer: result.answer,
+      model: result.model,
+      usage: {
+        promptTokens: result.promptTokens,
+        responseTokens: result.responseTokens,
+      },
+      performance: {
+        totalDurationNanoseconds: result.totalDuration,
+        loadDurationNanoseconds: result.loadDuration,
+      },
+    })
+  } catch (error) {
+    if (error.statusCode === 400) {
+      response.status(400).json({
+        success: false,
+        mode: 'general',
+        message: error.message,
+      })
+      return
+    }
+
+    if (error.statusCode === 503) {
+      response.status(503).json({
+        success: false,
+        mode: 'general',
+        message: error.message,
+      })
+      return
+    }
+
+    console.error('AUTOPAL AI ask failed', {
       message: error?.message,
     })
 
