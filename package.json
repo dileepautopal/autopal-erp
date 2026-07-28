@@ -14,6 +14,7 @@
     "test:company-selection": "node --test backend/companySelectionService.test.js",
     "test:customer-matcher": "node --test backend/customerFuzzyMatch.test.js",
     "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
+    "test:ollama": "node --test backend/ollamaService.test.js",
     "test:phase1": "node --test backend/phase1VerificationService.test.js",
     "test:pi-commercial": "node --test backend/piCommercialService.test.js",
     "test:pi-summary": "node --test backend/piSummaryService.test.js",

@@ -10,6 +10,10 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import pg from 'pg'
 import { createAITestConsoleRouter } from './aiTestConsole.js'
+import {
+  askOllama,
+  checkOllamaHealth,
+} from './ollamaService.js'
 import { createWhatsappPIRouter } from './whatsappPi.js'
 
 const { Pool } = pg
@@ -39,6 +43,27 @@ const RMKT_PI_TRAN_TABLE_NAME = 'tran_pi_rmkt'
 const CUSTOMER_DUPLICATE_MESSAGE =
   'Customer with same name, address, and city already exists.'
 const AI_TEST_CONSOLE_ENABLED = process.env.ENABLE_AI_TEST_CONSOLE === 'true'
+const AUTOPAL_AI_SYSTEM_PROMPT = `
+You are AUTOPAL's internal AI business assistant.
+
+Company context:
+AUTOPAL is associated with automotive lighting, Proforma Invoices,
+customer communication, inventory, sales and ERP activities.
+
+Current Phase 2 limitations:
+- You do not have access to the AUTOPAL database.
+- You do not know current stock, prices, balances, invoice values or live company records.
+- You must not claim that you accessed the ERP.
+- You must not invent business figures.
+
+Instructions:
+1. Give clear and professional answers.
+2. Draft business emails and WhatsApp messages when requested.
+3. Explain ERP, PI, inventory and business concepts simply.
+4. State clearly when actual ERP data is required.
+5. Do not fabricate customer names, prices, tax rates, quantities or company records.
+6. Keep ordinary answers concise unless details are requested.
+`.trim()
 const PUBLIC_REQUEST_LOG_PATHS = new Set([
   '/robots.txt',
   '/privacy.html',
@@ -2688,6 +2713,67 @@ app.get('/api/health', async (_request, response, next) => {
     })
   } catch (error) {
     next(error)
+  }
+})
+
+app.get('/api/ai/health', async (_request, response) => {
+  const health = await checkOllamaHealth()
+
+  response.status(health.running ? 200 : 503).json({
+    success: health.running,
+    service: 'AUTOPAL Local AI',
+    running: health.running,
+    baseUrl: health.baseUrl,
+    model: health.model,
+    message: health.message,
+  })
+})
+
+app.post('/api/ai/chat', async (request, response) => {
+  try {
+    const result = await askOllama({
+      question: request.body?.question,
+      systemPrompt: AUTOPAL_AI_SYSTEM_PROMPT,
+    })
+
+    response.json({
+      success: true,
+      answer: result.answer,
+      model: result.model,
+      usage: {
+        promptTokens: result.promptTokens,
+        responseTokens: result.responseTokens,
+      },
+      performance: {
+        totalDurationNanoseconds: result.totalDuration,
+        loadDurationNanoseconds: result.loadDuration,
+      },
+    })
+  } catch (error) {
+    if (error.statusCode === 400) {
+      response.status(400).json({
+        success: false,
+        message: error.message,
+      })
+      return
+    }
+
+    if (error.statusCode === 503) {
+      response.status(503).json({
+        success: false,
+        message: error.message,
+      })
+      return
+    }
+
+    console.error('AUTOPAL Local AI chat failed', {
+      message: error?.message,
+    })
+
+    response.status(500).json({
+      success: false,
+      message: 'Unable to process the AI request.',
+    })
   }
 })
 
