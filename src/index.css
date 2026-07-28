@@ -2340,6 +2340,207 @@ body,
   min-height: 220px;
 }
 
+.ai-assistant-page {
+  max-width: 1440px;
+}
+
+.ai-assistant-health {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.ai-health-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+
+.ai-health-pill.ready {
+  background: #ecfdf3;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.ai-health-pill.unavailable {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #be123c;
+}
+
+.ai-health-pill.checking {
+  background: var(--autopal-saffron-soft);
+  border-color: #f3d596;
+  color: #8a4c00;
+}
+
+.ai-assistant-notice {
+  align-items: start;
+  background: #fff7ed;
+  border: 1px solid rgba(234, 88, 12, 0.2);
+  border-radius: 8px;
+  color: #7c2d12;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-bottom: 18px;
+  padding: 14px 16px;
+}
+
+.ai-assistant-notice strong,
+.ai-assistant-notice span {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ai-assistant-layout {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1fr);
+}
+
+.ai-assistant-input-panel,
+.ai-assistant-answer-panel {
+  min-width: 0;
+}
+
+.ai-assistant-textarea {
+  min-height: 250px;
+  resize: vertical;
+}
+
+.ai-character-counter {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-character-counter.limit-exceeded {
+  color: var(--autopal-red);
+}
+
+.ai-suggested-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-suggested-prompts button {
+  background: #fff;
+  border: 1px solid rgba(181, 18, 27, 0.18);
+  border-radius: 999px;
+  color: var(--autopal-red-dark);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 9px 12px;
+}
+
+.ai-suggested-prompts button:hover {
+  background: var(--autopal-red-soft);
+  border-color: rgba(181, 18, 27, 0.32);
+}
+
+.ai-assistant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ai-answer-state,
+.ai-answer-empty,
+.ai-error-message,
+.ai-answer-content {
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.ai-answer-state {
+  background: var(--autopal-saffron-soft);
+  border: 1px solid #f3d596;
+  color: #8a4c00;
+  font-weight: 900;
+}
+
+.ai-answer-empty {
+  background: var(--surface-soft);
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.ai-error-message {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #be123c;
+  font-weight: 850;
+}
+
+.ai-answer-content {
+  background: #fffdf9;
+  border: 1px solid rgba(181, 18, 27, 0.12);
+  color: var(--ink);
+  font-size: 0.96rem;
+  line-height: 1.65;
+  min-height: 220px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ai-response-stats {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.ai-response-stats summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-response-stats dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 0;
+}
+
+.ai-response-stats div {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.ai-response-stats dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ai-response-stats dd {
+  color: var(--ink);
+  font-weight: 900;
+  margin: 3px 0 0;
+}
+
+.ai-health-message {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 750;
+  margin: 12px 0 0;
+}
+
 .ai-console-layout {
   align-items: stretch;
   display: grid;
@@ -3304,6 +3505,7 @@ body,
 
   .whatsapp-import-layout,
   .admin-user-layout,
+  .ai-assistant-layout,
   .ai-console-layout,
   .health-bottom-grid,
   .health-overview-grid,
@@ -3321,6 +3523,10 @@ body,
 
   .ai-console-result-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-assistant-health {
+    justify-content: flex-start;
   }
 
   .prospective-grid .field:nth-child(2) {
@@ -3431,6 +3637,15 @@ body,
 
   .page-header h1 {
     font-size: 29px;
+  }
+
+  .ai-assistant-notice {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-suggested-prompts button,
+  .ai-assistant-actions .btn {
+    width: 100%;
   }
 
   .summary-strip,

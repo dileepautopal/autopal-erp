@@ -12,6 +12,7 @@ export const OLLAMA_MODEL =
 const stripTrailingSlash = (value) => value.replace(/\/+$/, '')
 
 const getChatUrl = () => `${stripTrailingSlash(OLLAMA_BASE_URL)}/api/chat`
+const getHealthUrl = () => stripTrailingSlash(OLLAMA_BASE_URL)
 
 const createAbortSignal = (timeoutMs) => {
   const controller = new AbortController()
@@ -146,26 +147,8 @@ export const checkOllamaHealth = async () => {
   const timeout = createAbortSignal(HEALTH_TIMEOUT_MS)
 
   try {
-    const response = await fetch(getChatUrl(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: 'Reply with OK.',
-          },
-        ],
-        stream: false,
-        options: {
-          temperature: 0,
-          num_predict: 8,
-        },
-        keep_alive: '10m',
-      }),
+    const response = await fetch(getHealthUrl(), {
+      method: 'GET',
       signal: timeout.signal,
     })
 

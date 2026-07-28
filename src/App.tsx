@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AppShell } from './components/layout/AppShell'
 import { AdminPanel } from './pages/AdminPanel'
+import { AIAssistantPage } from './pages/AIAssistantPage'
 import { AICommunicationTestConsole } from './pages/AICommunicationTestConsole'
 import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
@@ -30,6 +31,7 @@ const STATIC_LEGAL_PAGE_PATHS: Record<LegalPagePath, string> = {
   '/data-deletion': '/data-deletion.html',
 }
 const AI_TEST_CONSOLE_PATH = '/admin/ai-communication-test-console'
+const AI_ASSISTANT_PATH = '/ai-assistant'
 const getDefaultRights = (isAdmin = false) =>
   navItems
     .filter((item) => isAdmin || item.id !== 'admin-panel')
@@ -208,6 +210,30 @@ const normalizeSessionRights = (rights?: ScreenId[], isAdmin = false) => {
   return allowedRights
 }
 
+const getScreenPath = (screen: ScreenId) => {
+  if (screen === 'ai-assistant') {
+    return AI_ASSISTANT_PATH
+  }
+
+  if (screen === 'ai-test-console') {
+    return AI_TEST_CONSOLE_PATH
+  }
+
+  return '/'
+}
+
+const replacePathForScreen = (screen: ScreenId) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const nextPath = getScreenPath(screen)
+
+  if (window.location.pathname !== nextPath) {
+    window.history.replaceState(null, '', nextPath)
+  }
+}
+
 const getStoredLoginSession = (): UserSession | null => {
   if (typeof window === 'undefined') {
     return null
@@ -354,10 +380,12 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
     }
 
     if (screen === 'create-pi') {
+      replacePathForScreen(screen)
       openBlankPI()
       return
     }
 
+    replacePathForScreen(screen)
     setActiveScreen(screen)
   }
 
@@ -456,11 +484,13 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       ...session,
       rights: normalizeSessionRights(session.rights, session.isAdmin),
     }
-    const nextScreen = normalizedSession.rights.includes('dashboard')
-      ? initialScreen === 'ai-test-console' && normalizedSession.isAdmin
-        ? 'ai-test-console'
-        : 'dashboard'
-      : normalizedSession.rights[0] ?? 'dashboard'
+    const canOpenInitialScreen = normalizedSession.rights.includes(initialScreen)
+      && (initialScreen !== 'ai-test-console' || normalizedSession.isAdmin)
+    const nextScreen = canOpenInitialScreen
+      ? initialScreen
+      : normalizedSession.rights.includes('dashboard')
+        ? 'dashboard'
+        : normalizedSession.rights[0] ?? 'dashboard'
 
     setLoginSession(normalizedSession)
     setActiveScreen(nextScreen)
@@ -468,7 +498,7 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       LOGIN_SESSION_KEY,
       JSON.stringify(normalizedSession),
     )
-    window.history.replaceState(null, '', window.location.href)
+    replacePathForScreen(nextScreen)
   }
 
   const handleLogout = () => {
@@ -477,7 +507,7 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
     setActiveScreen('dashboard')
     setPiForm(initialPIForm)
     setEditingPIId(null)
-    window.history.replaceState(null, '', window.location.href)
+    window.history.replaceState(null, '', '/')
   }
 
   if (!loginSession) {
@@ -525,6 +555,7 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       {currentScreen === 'products' && <ProductMaster />}
       {currentScreen === 'r-market-rates' && <RMarketProductRateMaster />}
       {currentScreen === 'customer-discounts' && <CustomerDiscountMaster />}
+      {currentScreen === 'ai-assistant' && <AIAssistantPage />}
       {currentScreen === 'admin-panel' && (
         <AdminPanel currentUserName={loginSession.userName} />
       )}
@@ -553,6 +584,10 @@ function App() {
 
   if (currentPath === AI_TEST_CONSOLE_PATH && isAITestConsoleEnabled) {
     return <AuthenticatedApp initialScreen="ai-test-console" />
+  }
+
+  if (currentPath === AI_ASSISTANT_PATH) {
+    return <AuthenticatedApp initialScreen="ai-assistant" />
   }
 
   if (isLegalPagePath(currentPath)) {

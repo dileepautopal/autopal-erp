@@ -22,6 +22,7 @@ export const navItems: NavItem[] = [
   { id: 'products', label: 'Product Master', meta: 'Lamp catalog' },
   { id: 'r-market-rates', label: 'R.Market Rates', meta: 'Trading rates' },
   { id: 'customer-discounts', label: 'Customer Discounts', meta: 'Scheme master' },
+  { id: 'ai-assistant', label: 'AI Assistant', meta: 'Business drafts' },
   { id: 'admin-panel', label: 'Admin Panel', meta: 'Users & rights' },
   ...(isAITestConsoleEnabled
     ? [

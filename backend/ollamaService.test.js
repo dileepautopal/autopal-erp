@@ -113,14 +113,10 @@ test('askOllama handles empty AI answers', async () => {
 
 test('checkOllamaHealth returns running true when Ollama responds', async () => {
   globalThis.fetch = async (url, options) => {
-    assert.equal(url, `${OLLAMA_BASE_URL}/api/chat`)
-    assert.equal(options.method, 'POST')
+    assert.equal(url, OLLAMA_BASE_URL)
+    assert.equal(options.method, 'GET')
 
-    return jsonResponse({
-      message: {
-        content: 'OK',
-      },
-    })
+    return new Response('Ollama is running')
   }
 
   const result = await checkOllamaHealth()

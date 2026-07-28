@@ -79,6 +79,7 @@ const MENU_SCREEN_IDS = [
   'products',
   'r-market-rates',
   'customer-discounts',
+  'ai-assistant',
   'admin-panel',
   ...(AI_TEST_CONSOLE_ENABLED ? ['ai-test-console'] : []),
 ]

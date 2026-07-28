@@ -9,6 +9,7 @@ export type ScreenId =
   | 'products'
   | 'r-market-rates'
   | 'customer-discounts'
+  | 'ai-assistant'
   | 'admin-panel'
   | 'ai-test-console'
 
