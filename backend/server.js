@@ -36,6 +36,11 @@ import {
   processExecutiveQuestion,
 } from './executiveIntentService.js'
 import {
+  getExecutiveDrillDown,
+  searchExecutiveData,
+} from './executiveDrillDownService.js'
+import { explainExecutiveDrillDown } from './executiveExplainService.js'
+import {
   classifyERPQuestion,
   ERP_INTELLIGENCE_SCREEN_ID,
   ERP_INTENTS,
@@ -3576,6 +3581,97 @@ app.post('/api/ai/executive/ask', async (request, response) => {
     })
     response.status(500).json({
       message: 'Unable to process Executive AI Cockpit question.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/executive/drilldown', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendExecutiveResult(
+      response,
+      await getExecutiveDrillDown({
+        ...getExecutiveBodyOptions(request),
+        filters: request.body?.filters,
+        limit: request.body?.limit,
+        type: request.body?.type,
+      }),
+    )
+  } catch (error) {
+    console.error('AUTOPAL Executive drill-down failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load Executive Drill-Down.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/executive/search', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendExecutiveResult(
+      response,
+      await searchExecutiveData({
+        category: request.query.category,
+        endDate: request.query.endDate,
+        limit: request.query.limit,
+        maxValue: request.query.maxValue,
+        minValue: request.query.minValue,
+        q: request.query.q,
+        queryable: pool,
+        startDate: request.query.startDate,
+        status: request.query.status,
+        tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+      }),
+    )
+  } catch (error) {
+    console.error('AUTOPAL Executive search failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to search Executive Drill-Down data.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/executive/explain', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendExecutiveResult(
+      response,
+      await explainExecutiveDrillDown({
+        ...getExecutiveBodyOptions(request),
+        drillDown: request.body?.drillDown,
+        filters: request.body?.filters,
+        limit: request.body?.limit,
+        type: request.body?.type,
+      }),
+    )
+  } catch (error) {
+    console.error('AUTOPAL Executive explain failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to explain Executive Drill-Down data.',
       success: false,
     })
   }

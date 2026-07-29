@@ -13,6 +13,9 @@ const AI_COMMERCIAL_BRIEF_URL = apiUrl('/api/ai/commercial/brief')
 const AI_EXECUTIVE_COCKPIT_URL = apiUrl('/api/ai/executive/cockpit')
 const AI_EXECUTIVE_BRIEF_URL = apiUrl('/api/ai/executive/brief')
 const AI_EXECUTIVE_ASK_URL = apiUrl('/api/ai/executive/ask')
+const AI_EXECUTIVE_DRILLDOWN_URL = apiUrl('/api/ai/executive/drilldown')
+const AI_EXECUTIVE_SEARCH_URL = apiUrl('/api/ai/executive/search')
+const AI_EXECUTIVE_EXPLAIN_URL = apiUrl('/api/ai/executive/explain')
 const AI_HEALTH_URL = apiUrl('/api/ai/health')
 const REQUEST_TIMEOUT_MS = 150_000
 
@@ -557,6 +560,124 @@ export type ExecutiveQuestionResponse = AIChatResponse & {
   mode?: 'executive'
 }
 
+export type ExecutiveDrillDownType =
+  | 'today-pis'
+  | 'yesterday-pis'
+  | 'week-pis'
+  | 'month-pis'
+  | 'previous-month-pis'
+  | 'open-pis'
+  | 'final-pis'
+  | 'highest-pi'
+  | 'lowest-pi'
+  | 'top-customer'
+  | 'top-product'
+  | 'top-company'
+  | 'customer-concentration'
+  | 'product-concentration'
+  | 'daily-trend-date'
+  | 'growing-customers'
+  | 'declining-customers'
+  | 'new-customers'
+  | 'inactive-customers'
+  | 'reactivated-customers'
+  | 'large-pi'
+  | 'no-today-activity'
+  | 'consecutive-no-pi-activity'
+  | 'month-comparison'
+  | 'customer-detail'
+  | 'product-detail'
+  | 'company-detail'
+  | 'pi-detail'
+
+export type ExecutiveDrillDownRequest = CommercialDashboardParams & {
+  filters?: Record<string, unknown>
+  limit?: number
+  type: ExecutiveDrillDownType
+}
+
+export type ExecutiveSummaryCard = {
+  label: string
+  type?: 'currency' | 'date' | 'number' | 'text' | string
+  value: unknown
+}
+
+export type ExecutiveDrillDownRow = Record<string, unknown> & {
+  amount?: number
+  companyCode?: number | null
+  companyName?: string
+  customerCode?: number | null
+  customerName?: string
+  grandTotal?: number
+  piDate?: string
+  piNumber?: string
+  productCode?: string
+  productDescription?: string
+  quantity?: number
+  rate?: number
+  status?: string
+}
+
+export type ExecutiveNextAction = {
+  filters?: Record<string, unknown>
+  label: string
+  type: ExecutiveDrillDownType
+}
+
+export type ExecutiveDrillDownResponse = {
+  success: boolean
+  disclaimer?: string
+  filters?: Record<string, unknown>
+  generatedAt?: string
+  message?: string
+  module?: string
+  nextActions?: ExecutiveNextAction[]
+  pagination?: {
+    hasMore?: boolean
+    limit?: number
+    returned?: number
+  }
+  period?: CommercialPeriod
+  rows?: ExecutiveDrillDownRow[]
+  summary?: {
+    cards?: ExecutiveSummaryCard[]
+    comparison?: Record<string, unknown>
+    detail?: Record<string, unknown>
+  }
+  timezone?: string
+  title?: string
+  type?: ExecutiveDrillDownType | string
+}
+
+export type ExecutiveSearchParams = {
+  category?: 'all' | 'company' | 'customer' | 'pi' | 'product' | 'status'
+  endDate?: string
+  limit?: number
+  maxValue?: number | string
+  minValue?: number | string
+  q?: string
+  startDate?: string
+  status?: string
+}
+
+export type ExecutiveSearchResponse = ExecutiveDrillDownResponse & {
+  category?: string
+}
+
+export type ExecutiveExplainResponse = {
+  success: boolean
+  disclaimer?: string
+  explanation?: string
+  generatedAt?: string
+  message?: string
+  model?: string | null
+  module?: string
+  source?: Record<string, unknown>
+  timezone?: string
+  verifiedData?: Record<string, unknown>
+  wordingMode?: string
+}
+
 const withTimeout = () => {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -911,6 +1032,46 @@ export const askExecutiveQuestion = (
       ...params,
       question,
     }),
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+    ...options,
+  })
+
+export const getExecutiveDrillDown = (
+  request: ExecutiveDrillDownRequest,
+  options: AskAIOptions = {},
+): Promise<ExecutiveDrillDownResponse> =>
+  fetchERPJson<ExecutiveDrillDownResponse>(AI_EXECUTIVE_DRILLDOWN_URL, {
+    body: JSON.stringify(request),
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+    ...options,
+  })
+
+export const searchExecutiveData = (
+  params: ExecutiveSearchParams,
+  options: AskAIOptions = {},
+): Promise<ExecutiveSearchResponse> =>
+  fetchERPJson<ExecutiveSearchResponse>(
+    `${AI_EXECUTIVE_SEARCH_URL}${buildQueryString(params)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const explainExecutiveDrillDown = (
+  request: ExecutiveDrillDownRequest & {
+    drillDown?: ExecutiveDrillDownResponse
+  },
+  options: AskAIOptions = {},
+): Promise<ExecutiveExplainResponse> =>
+  fetchERPJson<ExecutiveExplainResponse>(AI_EXECUTIVE_EXPLAIN_URL, {
+    body: JSON.stringify(request),
     headers: {
       'Content-Type': 'application/json',
     },

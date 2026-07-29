@@ -7,10 +7,15 @@ import {
   type FormEvent,
 } from 'react'
 import { Button } from '../components/ui/Button'
+import { ExecutiveDrillDownPanel } from '../components/ExecutiveDrillDownPanel'
+import { ExecutiveSearchBar } from '../components/ExecutiveSearchBar'
 import {
   askExecutiveQuestion,
+  explainExecutiveDrillDown,
   getExecutiveBrief,
   getExecutiveCockpit,
+  getExecutiveDrillDown,
+  searchExecutiveData,
   type CommercialCompanyRow,
   type CommercialCustomerRow,
   type CommercialDashboardParams,
@@ -20,6 +25,12 @@ import {
   type ExecutiveAlert,
   type ExecutiveBriefResponse,
   type ExecutiveCockpitResponse,
+  type ExecutiveDrillDownRequest,
+  type ExecutiveDrillDownResponse,
+  type ExecutiveDrillDownRow,
+  type ExecutiveDrillDownType,
+  type ExecutiveExplainResponse,
+  type ExecutiveSearchParams,
   type ExecutiveTrendRow,
 } from '../services/aiService'
 import { createXlsxWorkbookBytes } from '../services/piReportExportService'
@@ -46,6 +57,10 @@ type ExportTable = {
   title: string
   types: ExportColumnType[]
   widths?: number[]
+}
+type DrillDownHistoryEntry = {
+  data: ExecutiveDrillDownResponse
+  request: ExecutiveDrillDownRequest
 }
 type XlsxSheet = Parameters<typeof createXlsxWorkbookBytes>[0][number]
 type XlsxCell = XlsxSheet['rows'][number][number]
@@ -117,6 +132,21 @@ const quickPrompts = [
   'Show current PI concentration',
   'Give me a management brief',
 ]
+
+const alertTypeToDrillDownType: Record<string, ExecutiveDrillDownType> = {
+  all_open_pi_status: 'open-pis',
+  consecutive_no_pi_activity: 'consecutive-no-pi-activity',
+  customer_concentration: 'customer-concentration',
+  inactive_customer_activity: 'inactive-customers',
+  large_pi_value: 'large-pi',
+  new_customer_activity: 'new-customers',
+  no_final_pi: 'final-pis',
+  no_pi_activity_today: 'no-today-activity',
+  pi_count_decline: 'month-comparison',
+  pi_value_decline: 'month-comparison',
+  product_concentration: 'product-concentration',
+  reactivated_customer_activity: 'reactivated-customers',
+}
 
 const toNumber = (value: unknown) => {
   const number = Number(value ?? 0)
@@ -320,6 +350,70 @@ const buildExportTables = (
   briefTable(brief),
 ]
 
+const getDrillDownColumns = (rows: ExecutiveDrillDownRow[]) => {
+  const preferredColumns = [
+    'piNumber',
+    'piDate',
+    'customerName',
+    'companyName',
+    'status',
+    'grandTotal',
+    'productCode',
+    'productDescription',
+    'quantity',
+    'rate',
+    'amount',
+    'currentPICount',
+    'currentPIValue',
+    'totalPILineValue',
+    'classification',
+    'lastPIDate',
+  ]
+  const present = new Set(rows.flatMap((row) => Object.keys(row)))
+  const ordered = preferredColumns.filter((column) => present.has(column))
+  const extra = Array.from(present)
+    .filter((column) => !ordered.includes(column))
+    .filter((column) => !/gst|pan|address|phone|email|bank/i.test(column))
+    .slice(0, 8)
+
+  return [...ordered, ...extra]
+}
+
+const drillDownTable = (data: ExecutiveDrillDownResponse | null): ExportTable => {
+  const rows = getRows(data?.rows)
+  const columns = getDrillDownColumns(rows)
+
+  return {
+    headers: columns.map((column) =>
+      column
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/^./, (letter) => letter.toUpperCase()),
+    ),
+    rows: rows.map((row) =>
+      columns.map((column) => {
+        const value = row[column]
+
+        return typeof value === 'number' || typeof value === 'string'
+          ? value
+          : String(value ?? '')
+      }),
+    ),
+    title: data?.title || 'Executive Drill-Down',
+    types: columns.map((column) =>
+      ['amount', 'grandTotal', 'rate', 'currentPIValue', 'totalPILineValue'].includes(column)
+        ? 'currency'
+        : /date/i.test(column)
+          ? 'date'
+          : ['quantity', 'currentPICount'].includes(column)
+            ? 'number'
+            : 'text',
+    ),
+    widths: columns.map((column) =>
+      ['productDescription', 'customerName', 'companyName'].includes(column) ? 34 : 18,
+    ),
+  }
+}
+
 const cell = (
   value: XlsxCell['value'],
   type: XlsxCell['type'] = 'text',
@@ -357,7 +451,13 @@ const escapeHtml = (value: unknown) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
 
-function DataTable({ table }: { table: ExportTable }) {
+function DataTable({
+  onRowSelect,
+  table,
+}: {
+  onRowSelect?: (rowIndex: number) => void
+  table: ExportTable
+}) {
   const displayTable = tableForDisplay(table)
 
   if (displayTable.rows.length === 0) {
@@ -381,7 +481,22 @@ function DataTable({ table }: { table: ExportTable }) {
         </thead>
         <tbody>
           {displayTable.rows.map((row, rowIndex) => (
-            <tr key={`${displayTable.title}-${rowIndex}`}>
+            <tr
+              className={onRowSelect ? 'executive-click-row' : ''}
+              key={`${displayTable.title}-${rowIndex}`}
+              onClick={onRowSelect ? () => onRowSelect(rowIndex) : undefined}
+              onKeyDown={
+                onRowSelect
+                  ? (event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onRowSelect(rowIndex)
+                      }
+                    }
+                  : undefined
+              }
+              tabIndex={onRowSelect ? 0 : undefined}
+            >
               {row.map((value, columnIndex) => (
                 <td
                   className={
@@ -405,13 +520,28 @@ function DataTable({ table }: { table: ExportTable }) {
 
 function KpiCard({
   label,
+  onClick,
   tone = 'red',
   value,
 }: {
   label: string
+  onClick?: () => void
   tone?: 'red' | 'saffron'
   value: string
 }) {
+  if (onClick) {
+    return (
+      <button
+        className={`metric-card pi-intelligence-metric executive-click-card accent-${tone}`}
+        onClick={onClick}
+        type="button"
+      >
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </button>
+    )
+  }
+
   return (
     <div className={`metric-card pi-intelligence-metric accent-${tone}`}>
       <span>{label}</span>
@@ -422,11 +552,13 @@ function KpiCard({
 
 function BarList({
   currency = false,
+  onSelect,
   rows,
   title,
 }: {
   currency?: boolean
-  rows: Array<{ label: string; value: number }>
+  onSelect?: (row: { label: string; raw?: unknown; value: number }) => void
+  rows: Array<{ label: string; raw?: unknown; value: number }>
   title: string
 }) {
   const maxValue = Math.max(...rows.map((row) => row.value), 0)
@@ -438,7 +570,12 @@ function BarList({
   return (
     <div className="pi-intelligence-daily-list" aria-label={title}>
       {rows.map((row) => (
-        <div className="pi-intelligence-day-row" key={`${title}-${row.label}`}>
+        <button
+          className={`pi-intelligence-day-row ${onSelect ? 'executive-click-bar' : ''}`}
+          key={`${title}-${row.label}`}
+          onClick={onSelect ? () => onSelect(row) : undefined}
+          type="button"
+        >
           <div className="pi-intelligence-day-meta">
             <span>{row.label}</span>
             <strong>{currency ? formatINR(row.value) : formatCount(row.value)}</strong>
@@ -451,7 +588,7 @@ function BarList({
               }}
             />
           </span>
-        </div>
+        </button>
       ))}
     </div>
   )
@@ -468,9 +605,19 @@ export function ExecutiveAICockpit({ currentUserName }: ExecutiveAICockpitProps)
   const [questionAnswer, setQuestionAnswer] = useState('')
   const [voiceMessage, setVoiceMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
+  const [drillDownError, setDrillDownError] = useState('')
+  const [drillDownExportMessage, setDrillDownExportMessage] = useState('')
+  const [explainError, setExplainError] = useState('')
   const [exportMessage, setExportMessage] = useState('')
   const [exportScope, setExportScope] = useState<ExportScope>('current-view')
+  const [drillDown, setDrillDown] = useState<ExecutiveDrillDownResponse | null>(null)
+  const [drillDownRequest, setDrillDownRequest] =
+    useState<ExecutiveDrillDownRequest | null>(null)
+  const [drillDownHistory, setDrillDownHistory] = useState<DrillDownHistoryEntry[]>([])
+  const [explanation, setExplanation] = useState<ExecutiveExplainResponse | null>(null)
   const [isBriefLoading, setIsBriefLoading] = useState(false)
+  const [isDrillDownLoading, setIsDrillDownLoading] = useState(false)
+  const [isExplaining, setIsExplaining] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isQuestionLoading, setIsQuestionLoading] = useState(false)
@@ -511,6 +658,9 @@ export function ExecutiveAICockpit({ currentUserName }: ExecutiveAICockpitProps)
   const trendRows = getRows(cockpit?.trend)
   const alerts = getRows(cockpit?.alerts)
   const customerStatusCounts = cockpit?.growthHighlights?.customerStatusCounts ?? {}
+  const topCustomer = cockpit?.customerHighlights?.topCustomer ?? null
+  const topProduct = cockpit?.productHighlights?.topProduct ?? null
+  const topCompany = cockpit?.companyHighlights?.topCompany ?? null
 
   const loadCockpit = useCallback(async () => {
     if (period === 'custom' && (!customStartDate || !customEndDate)) {
@@ -542,6 +692,210 @@ export function ExecutiveAICockpit({ currentUserName }: ExecutiveAICockpitProps)
       setIsLoading(false)
     }
   }, [currentUserName, customEndDate, customStartDate, period, requestParams])
+
+  const openDrillDown = useCallback(
+    async (request: ExecutiveDrillDownRequest, pushHistory = true) => {
+      const nextRequest: ExecutiveDrillDownRequest = {
+        ...requestParams,
+        ...request,
+        filters: request.filters ?? {},
+      }
+
+      setIsDrillDownLoading(true)
+      setDrillDownError('')
+      setDrillDownExportMessage('')
+      setExplainError('')
+      setExplanation(null)
+
+      if (pushHistory && drillDown && drillDownRequest) {
+        setDrillDownHistory((current) => [
+          ...current,
+          {
+            data: drillDown,
+            request: drillDownRequest,
+          },
+        ])
+      }
+
+      try {
+        const response = await getExecutiveDrillDown(nextRequest, {
+          userName: currentUserName,
+        })
+
+        if (!response.success) {
+          throw new Error(response.message || 'Executive drill-down is unavailable.')
+        }
+
+        setDrillDown(response)
+        setDrillDownRequest(nextRequest)
+      } catch (error) {
+        setDrillDownError(
+          error instanceof Error
+            ? error.message
+            : 'Executive drill-down is unavailable.',
+        )
+      } finally {
+        setIsDrillDownLoading(false)
+      }
+    },
+    [currentUserName, drillDown, drillDownRequest, requestParams],
+  )
+
+  const closeDrillDown = useCallback(() => {
+    setDrillDown(null)
+    setDrillDownRequest(null)
+    setDrillDownHistory([])
+    setDrillDownError('')
+    setDrillDownExportMessage('')
+    setExplainError('')
+    setExplanation(null)
+  }, [])
+
+  const goBackDrillDown = () => {
+    setDrillDownHistory((current) => {
+      const previous = current.at(-1)
+
+      if (!previous) {
+        return current
+      }
+
+      setDrillDown(previous.data)
+      setDrillDownRequest(previous.request)
+      setExplanation(null)
+      setExplainError('')
+
+      return current.slice(0, -1)
+    })
+  }
+
+  const explainCurrentDrillDown = async () => {
+    if (!drillDown || !drillDownRequest) {
+      return
+    }
+
+    setIsExplaining(true)
+    setExplainError('')
+
+    try {
+      const response = await explainExecutiveDrillDown(
+        {
+          ...drillDownRequest,
+          drillDown,
+        },
+        {
+          userName: currentUserName,
+        },
+      )
+
+      if (!response.success) {
+        throw new Error(response.message || 'Explanation is unavailable.')
+      }
+
+      setExplanation(response)
+    } catch (error) {
+      setExplainError(
+        error instanceof Error ? error.message : 'Explanation is unavailable.',
+      )
+    } finally {
+      setIsExplaining(false)
+    }
+  }
+
+  const searchExecutive = async (params: ExecutiveSearchParams) => {
+    setIsDrillDownLoading(true)
+    setDrillDownError('')
+    setDrillDownExportMessage('')
+    setExplanation(null)
+    setExplainError('')
+
+    try {
+      const response = await searchExecutiveData(params, {
+        userName: currentUserName,
+      })
+
+      if (!response.success) {
+        throw new Error(response.message || 'Executive search is unavailable.')
+      }
+
+      if (drillDown && drillDownRequest) {
+        setDrillDownHistory((current) => [
+          ...current,
+          {
+            data: drillDown,
+            request: drillDownRequest,
+          },
+        ])
+      }
+
+      setDrillDown({
+        ...response,
+        title: 'Executive Search Results',
+        type: 'month-pis',
+      })
+      setDrillDownRequest({
+        ...requestParams,
+        filters: {
+          q: params.q,
+          status: params.status,
+        },
+        type: 'month-pis',
+      })
+    } catch (error) {
+      setDrillDownError(
+        error instanceof Error ? error.message : 'Executive search is unavailable.',
+      )
+    } finally {
+      setIsDrillDownLoading(false)
+    }
+  }
+
+  const openRowDrillDown = (row: ExecutiveDrillDownRow) => {
+    if (row.piNumber) {
+      void openDrillDown({
+        ...requestParams,
+        filters: {
+          piNumber: row.piNumber,
+        },
+        type: 'pi-detail',
+      })
+      return
+    }
+
+    if (row.productCode) {
+      void openDrillDown({
+        ...requestParams,
+        filters: {
+          productCode: row.productCode,
+          productDescription: row.productDescription,
+        },
+        type: 'product-detail',
+      })
+      return
+    }
+
+    if (row.customerCode || row.customerName) {
+      void openDrillDown({
+        ...requestParams,
+        filters: {
+          customerCode: row.customerCode,
+          customerName: row.customerName,
+        },
+        type: 'customer-detail',
+      })
+      return
+    }
+
+    if (row.companyCode || row.companyName) {
+      void openDrillDown({
+        ...requestParams,
+        filters: {
+          companyCode: row.companyCode,
+          companyName: row.companyName,
+        },
+        type: 'company-detail',
+      })
+    }
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -763,6 +1117,135 @@ ${tableHtml}
     setExportMessage('Print report opened. Use the print dialog to save as PDF.')
   }
 
+  const exportDrillDownCsv = () => {
+    const table = drillDownTable(drillDown)
+    const displayTable = tableForDisplay(table)
+    const rows = [
+      ['AUTOPAL Executive Drill-Down'],
+      ['Title', drillDown?.title || 'Executive Drill-Down'],
+      ['Generated At', formatReportDateTime(new Date().toISOString())],
+      ['Disclaimer', EXECUTIVE_DISCLAIMER],
+      [],
+      displayTable.headers,
+      ...displayTable.rows,
+    ]
+    const blob = new Blob([createCsvText(rows)], {
+      type: 'text/csv;charset=utf-8',
+    })
+    const filename = sanitizeFilename(
+      `AUTOPAL_Executive_Drilldown_${drillDown?.type || 'report'}_${getIndiaTimestampStamp()}`,
+      'csv',
+    )
+
+    downloadBlob(blob, filename)
+    setDrillDownExportMessage(`${filename} generated.`)
+  }
+
+  const exportDrillDownXlsx = () => {
+    const generatedAt = new Date().toISOString()
+    const table = drillDownTable(drillDown)
+    const sheet = tableToXlsxSheet(
+      table,
+      generatedAt,
+      currentUserName,
+      `${drillDown?.period?.label || 'Selected period'} ${formatDateRange(
+        drillDown?.period?.startDate,
+        drillDown?.period?.endDate,
+      )}`,
+    )
+    const bytes = createXlsxWorkbookBytes([sheet], generatedAt)
+    const blob = new Blob([bytes], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const filename = sanitizeFilename(
+      `AUTOPAL_Executive_Drilldown_${drillDown?.type || 'report'}_${getIndiaTimestampStamp()}`,
+      'xlsx',
+    )
+
+    downloadBlob(blob, filename)
+    setDrillDownExportMessage(`${filename} generated.`)
+  }
+
+  const printDrillDown = () => {
+    const printWindow = window.open('', '_blank')
+
+    if (!printWindow || !drillDown) {
+      setDrillDownExportMessage('Please allow pop-ups to open the drill-down report.')
+      return
+    }
+
+    const table = tableForDisplay(drillDownTable(drillDown))
+    const summaryHtml = (drillDown.summary?.cards ?? [])
+      .map(
+        (card) =>
+          `<div><strong>${escapeHtml(card.label)}</strong><span>${escapeHtml(
+            getDisplayValue(
+              typeof card.value === 'number' || typeof card.value === 'string'
+                ? card.value
+                : String(card.value ?? ''),
+              card.type === 'currency' ||
+                card.type === 'date' ||
+                card.type === 'number' ||
+                card.type === 'text'
+                ? card.type
+                : 'text',
+            ),
+          )}</span></div>`,
+      )
+      .join('')
+    const tableHtml = `<table><thead><tr>${table.headers
+      .map((header) => `<th>${escapeHtml(header)}</th>`)
+      .join('')}</tr></thead><tbody>${table.rows
+      .map(
+        (row) =>
+          `<tr>${row
+            .map((value) => `<td>${escapeHtml(value || '-')}</td>`)
+            .join('')}</tr>`,
+      )
+      .join('')}</tbody></table>`
+
+    printWindow.opener = null
+    printWindow.document.open()
+    printWindow.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AUTOPAL Executive Drill-Down</title>
+<style>
+body { color: #171016; font-family: Arial, sans-serif; margin: 24px; }
+h1 { color: #b5121b; font-size: 24px; margin: 0 0 8px; }
+.meta, .summary { color: #5f555b; display: grid; font-size: 12px; gap: 6px; margin-bottom: 14px; }
+.summary { grid-template-columns: repeat(3, 1fr); }
+.summary div { border: 1px solid #e8c9c9; padding: 8px; }
+.summary strong, .summary span { display: block; }
+.disclaimer { border: 1px solid #f0b35d; border-radius: 6px; color: #7c2d12; font-size: 12px; font-weight: 700; padding: 8px; }
+table { border-collapse: collapse; margin-top: 14px; width: 100%; }
+th, td { border: 1px solid #e8c9c9; font-size: 10px; padding: 5px; text-align: left; vertical-align: top; }
+th { background: #d30b16; color: #fff; }
+@page { margin: 14mm; size: A4 landscape; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(drillDown.title || 'Executive Drill-Down')}</h1>
+<div class="meta">
+<span>Generated by: ${escapeHtml(currentUserName || 'AUTOPAL user')}</span>
+<span>Generated at: ${escapeHtml(formatReportDateTime(new Date().toISOString()))}</span>
+<span>${escapeHtml(drillDown.period?.label || 'Selected period')}: ${escapeHtml(
+      formatDateRange(drillDown.period?.startDate, drillDown.period?.endDate),
+    )}</span>
+<span>Live ERP data</span>
+</div>
+<p class="disclaimer">${escapeHtml(EXECUTIVE_DISCLAIMER)}</p>
+<section class="summary">${summaryHtml}</section>
+${tableHtml}
+</body>
+</html>`)
+    printWindow.document.close()
+    printWindow.focus()
+    window.setTimeout(() => printWindow.print(), 250)
+    setDrillDownExportMessage('Drill-down print report opened. Use print to save PDF.')
+  }
+
   return (
     <div className="page pi-intelligence-page executive-cockpit-page">
       <header className="page-header">
@@ -848,6 +1331,19 @@ ${tableHtml}
         </div>
       </section>
 
+      <section className="panel pi-intelligence-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Global Search</p>
+            <h2>Executive Supporting Records</h2>
+          </div>
+        </div>
+        <ExecutiveSearchBar
+          disabled={isDrillDownLoading}
+          onSearch={(params) => void searchExecutive(params)}
+        />
+      </section>
+
       {errorMessage ? (
         <section className="pi-intelligence-error" role="alert">
           <strong>Executive Cockpit unavailable</strong>
@@ -862,85 +1358,245 @@ ${tableHtml}
       ) : null}
 
       <section className="dashboard-grid executive-kpi-grid">
-        <KpiCard label="Today PI Count" value={formatCount(kpis.todayPICount)} />
-        <KpiCard tone="saffron" label="Today PI Value" value={formatINR(kpis.todayPIValue)} />
-        <KpiCard label="Yesterday PI Count" value={formatCount(kpis.yesterdayPICount)} />
+        <KpiCard
+          label="Today PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'today-pis' })}
+          value={formatCount(kpis.todayPICount)}
+        />
+        <KpiCard
+          tone="saffron"
+          label="Today PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'today-pis' })}
+          value={formatINR(kpis.todayPIValue)}
+        />
+        <KpiCard
+          label="Yesterday PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'yesterday-pis' })}
+          value={formatCount(kpis.yesterdayPICount)}
+        />
         <KpiCard
           tone="saffron"
           label="Yesterday PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'yesterday-pis' })}
           value={formatINR(kpis.yesterdayPIValue)}
         />
-        <KpiCard label="This Week PI Count" value={formatCount(kpis.thisWeekPICount)} />
+        <KpiCard
+          label="This Week PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'week-pis' })}
+          value={formatCount(kpis.thisWeekPICount)}
+        />
         <KpiCard
           tone="saffron"
           label="This Week PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'week-pis' })}
           value={formatINR(kpis.thisWeekPIValue)}
         />
-        <KpiCard label="This Month PI Count" value={formatCount(kpis.thisMonthPICount)} />
+        <KpiCard
+          label="This Month PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-pis' })}
+          value={formatCount(kpis.thisMonthPICount)}
+        />
         <KpiCard
           tone="saffron"
           label="This Month PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-pis' })}
           value={formatINR(kpis.thisMonthPIValue)}
         />
         <KpiCard
           label="Previous Month PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'previous-month-pis' })}
           value={formatCount(kpis.previousMonthPICount)}
         />
         <KpiCard
           tone="saffron"
           label="Previous Month PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'previous-month-pis' })}
           value={formatINR(kpis.previousMonthPIValue)}
         />
         <KpiCard
           label="Monthly Count Change"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-comparison' })}
           value={formatPercent(kpis.monthlyCountChangePercentage)}
         />
         <KpiCard
           label="Monthly Value Change"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-comparison' })}
           value={formatPercent(kpis.monthlyValueChangePercentage)}
         />
-        <KpiCard tone="saffron" label="Average PI Value" value={formatINR(kpis.averagePIValue)} />
-        <KpiCard tone="saffron" label="Highest PI Value" value={formatINR(kpis.highestPIValue)} />
-        <KpiCard tone="saffron" label="Lowest PI Value" value={formatINR(kpis.lowestPIValue)} />
-        <KpiCard label="Open PI Count" value={formatCount(kpis.openPICount)} />
-        <KpiCard tone="saffron" label="Open PI Value" value={formatINR(kpis.openPIValue)} />
-        <KpiCard label="Final PI Count" value={formatCount(kpis.finalPICount)} />
-        <KpiCard tone="saffron" label="Final PI Value" value={formatINR(kpis.finalPIValue)} />
-        <KpiCard label="Open Percentage" value={formatPercent(kpis.openPercentage)} />
-        <KpiCard label="Final Percentage" value={formatPercent(kpis.finalPercentage)} />
+        <KpiCard
+          tone="saffron"
+          label="Average PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-pis' })}
+          value={formatINR(kpis.averagePIValue)}
+        />
+        <KpiCard
+          tone="saffron"
+          label="Highest PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'highest-pi' })}
+          value={formatINR(kpis.highestPIValue)}
+        />
+        <KpiCard
+          tone="saffron"
+          label="Lowest PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'lowest-pi' })}
+          value={formatINR(kpis.lowestPIValue)}
+        />
+        <KpiCard
+          label="Open PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'open-pis' })}
+          value={formatCount(kpis.openPICount)}
+        />
+        <KpiCard
+          tone="saffron"
+          label="Open PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'open-pis' })}
+          value={formatINR(kpis.openPIValue)}
+        />
+        <KpiCard
+          label="Final PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'final-pis' })}
+          value={formatCount(kpis.finalPICount)}
+        />
+        <KpiCard
+          tone="saffron"
+          label="Final PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'final-pis' })}
+          value={formatINR(kpis.finalPIValue)}
+        />
+        <KpiCard
+          label="Open Percentage"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'open-pis' })}
+          value={formatPercent(kpis.openPercentage)}
+        />
+        <KpiCard
+          label="Final Percentage"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'final-pis' })}
+          value={formatPercent(kpis.finalPercentage)}
+        />
         <KpiCard
           label="Average Daily PI Count"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-pis' })}
           value={formatCount(kpis.averageDailyPICount)}
         />
         <KpiCard
           tone="saffron"
           label="Average Daily PI Value"
+          onClick={() => void openDrillDown({ ...requestParams, type: 'month-pis' })}
           value={formatINR(kpis.averageDailyPIValue)}
         />
-        <KpiCard label="Top Customer" value={kpis.topCustomer || '-'} />
+        <KpiCard
+          label="Top Customer"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                customerCode: topCustomer?.customerCode,
+                customerName: topCustomer?.customerName,
+              },
+              type: 'top-customer',
+            })
+          }
+          value={kpis.topCustomer || '-'}
+        />
         <KpiCard
           tone="saffron"
           label="Top Customer PI Value"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                customerCode: topCustomer?.customerCode,
+                customerName: topCustomer?.customerName,
+              },
+              type: 'top-customer',
+            })
+          }
           value={formatINR(kpis.topCustomerPIValue)}
         />
         <KpiCard
           label="Top Customer Share"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                customerCode: topCustomer?.customerCode,
+                customerName: topCustomer?.customerName,
+              },
+              type: 'customer-concentration',
+            })
+          }
           value={formatPercent(kpis.topCustomerSharePercentage)}
         />
-        <KpiCard label="Top Product" value={kpis.topProduct || '-'} />
+        <KpiCard
+          label="Top Product"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                productCode: topProduct?.productCode,
+                productDescription: topProduct?.productDescription,
+              },
+              type: 'top-product',
+            })
+          }
+          value={kpis.topProduct || '-'}
+        />
         <KpiCard
           tone="saffron"
           label="Top Product PI Line Value"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                productCode: topProduct?.productCode,
+                productDescription: topProduct?.productDescription,
+              },
+              type: 'top-product',
+            })
+          }
           value={formatINR(kpis.topProductPILineValue)}
         />
-        <KpiCard label="Top Company" value={kpis.topCompany || '-'} />
+        <KpiCard
+          label="Top Company"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                companyCode: topCompany?.companyCode,
+                companyName: topCompany?.companyName,
+              },
+              type: 'top-company',
+            })
+          }
+          value={kpis.topCompany || '-'}
+        />
         <KpiCard
           tone="saffron"
           label="Top Company PI Value"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                companyCode: topCompany?.companyCode,
+                companyName: topCompany?.companyName,
+              },
+              type: 'top-company',
+            })
+          }
           value={formatINR(kpis.topCompanyPIValue)}
         />
         <KpiCard
           label="Commercial Concentration"
+          onClick={() =>
+            void openDrillDown({
+              ...requestParams,
+              filters: {
+                customerCode: topCustomer?.customerCode,
+                customerName: topCustomer?.customerName,
+              },
+              type: 'customer-concentration',
+            })
+          }
           value={kpis.commercialConcentrationLabel || '-'}
         />
       </section>
@@ -976,10 +1632,25 @@ ${tableHtml}
           <div className="executive-alert-list">
             {alerts.length > 0 ? (
               alerts.map((alert, index) => (
-                <div className={`executive-alert ${alert.severity}`} key={`${alert.type}-${index}`}>
+                <button
+                  className={`executive-alert ${alert.severity}`}
+                  key={`${alert.type}-${index}`}
+                  onClick={() =>
+                    void openDrillDown({
+                      ...requestParams,
+                      filters: {
+                        customerName: alert.data?.customer,
+                        piNumber: alert.data?.piNumber,
+                        productDescription: alert.data?.product,
+                      },
+                      type: alertTypeToDrillDownType[alert.type] ?? 'month-pis',
+                    })
+                  }
+                  type="button"
+                >
                   <span>{alert.severity}</span>
                   <strong>{alert.message}</strong>
-                </div>
+                </button>
               ))
             ) : (
               <p className="dashboard-chart-empty">
@@ -996,7 +1667,18 @@ ${tableHtml}
             <h2>Daily PI Count Trend</h2>
           </div>
           <BarList
-            rows={trendRows.map((row) => ({ label: formatReportDate(row.date), value: row.count }))}
+            onSelect={(row) => {
+              const trendRow = row.raw as ExecutiveTrendRow | undefined
+
+              void openDrillDown({
+                ...requestParams,
+                filters: {
+                  date: trendRow?.date,
+                },
+                type: 'daily-trend-date',
+              })
+            }}
+            rows={trendRows.map((row) => ({ label: formatReportDate(row.date), raw: row, value: row.count }))}
             title="Daily PI Count Trend"
           />
         </section>
@@ -1006,7 +1688,18 @@ ${tableHtml}
           </div>
           <BarList
             currency
-            rows={trendRows.map((row) => ({ label: formatReportDate(row.date), value: row.value }))}
+            onSelect={(row) => {
+              const trendRow = row.raw as ExecutiveTrendRow | undefined
+
+              void openDrillDown({
+                ...requestParams,
+                filters: {
+                  date: trendRow?.date,
+                },
+                type: 'daily-trend-date',
+              })
+            }}
+            rows={trendRows.map((row) => ({ label: formatReportDate(row.date), raw: row, value: row.value }))}
             title="Daily PI Value Trend"
           />
         </section>
@@ -1016,6 +1709,12 @@ ${tableHtml}
           </div>
           <BarList
             currency
+            onSelect={(row) =>
+              void openDrillDown({
+                ...requestParams,
+                type: row.label === 'Previous Month' ? 'previous-month-pis' : 'month-pis',
+              })
+            }
             rows={[
               { label: 'This Month', value: kpis.thisMonthPIValue ?? 0 },
               { label: 'Previous Month', value: kpis.previousMonthPIValue ?? 0 },
@@ -1028,6 +1727,12 @@ ${tableHtml}
             <h2>Open versus Final</h2>
           </div>
           <BarList
+            onSelect={(row) =>
+              void openDrillDown({
+                ...requestParams,
+                type: row.label === 'Final' ? 'final-pis' : 'open-pis',
+              })
+            }
             rows={[
               { label: 'Open', value: kpis.openPercentage ?? 0 },
               { label: 'Final', value: kpis.finalPercentage ?? 0 },
@@ -1045,7 +1750,21 @@ ${tableHtml}
               <h2>Top Customers by PI Value</h2>
             </div>
           </div>
-          <DataTable table={customerTable(customerRows)} />
+          <DataTable
+            onRowSelect={(rowIndex) => {
+              const row = customerRows[rowIndex]
+
+              void openDrillDown({
+                ...requestParams,
+                filters: {
+                  customerCode: row?.customerCode,
+                  customerName: row?.customerName,
+                },
+                type: 'customer-detail',
+              })
+            }}
+            table={customerTable(customerRows)}
+          />
         </section>
         <section className="panel pi-intelligence-panel">
           <div className="section-heading">
@@ -1054,7 +1773,21 @@ ${tableHtml}
               <h2>Top Products by PI Line Value</h2>
             </div>
           </div>
-          <DataTable table={productTable(productRows)} />
+          <DataTable
+            onRowSelect={(rowIndex) => {
+              const row = productRows[rowIndex]
+
+              void openDrillDown({
+                ...requestParams,
+                filters: {
+                  productCode: row?.productCode,
+                  productDescription: row?.productDescription,
+                },
+                type: 'product-detail',
+              })
+            }}
+            table={productTable(productRows)}
+          />
         </section>
         <section className="panel pi-intelligence-panel">
           <div className="section-heading">
@@ -1063,7 +1796,21 @@ ${tableHtml}
               <h2>Company-wise PI Value</h2>
             </div>
           </div>
-          <DataTable table={companyTable(companyRows)} />
+          <DataTable
+            onRowSelect={(rowIndex) => {
+              const row = companyRows[rowIndex]
+
+              void openDrillDown({
+                ...requestParams,
+                filters: {
+                  companyCode: row?.companyCode,
+                  companyName: row?.companyName,
+                },
+                type: 'company-detail',
+              })
+            }}
+            table={companyTable(companyRows)}
+          />
         </section>
         <section className="panel pi-intelligence-panel">
           <div className="section-heading">
@@ -1073,6 +1820,26 @@ ${tableHtml}
             </div>
           </div>
           <BarList
+            onSelect={(row) => {
+              const normalized = row.label.toLowerCase()
+              const type =
+                normalized === 'growing'
+                  ? 'growing-customers'
+                  : normalized === 'declining'
+                    ? 'declining-customers'
+                    : normalized === 'new'
+                      ? 'new-customers'
+                      : normalized === 'inactive'
+                        ? 'inactive-customers'
+                        : normalized === 'reactivated'
+                          ? 'reactivated-customers'
+                          : 'month-pis'
+
+              void openDrillDown({
+                ...requestParams,
+                type,
+              })
+            }}
             rows={Object.entries(customerStatusCounts).map(([label, value]) => ({
               label,
               value: Number(value ?? 0),
@@ -1183,6 +1950,25 @@ ${tableHtml}
           not created automatically.
         </span>
       </section>
+
+      <ExecutiveDrillDownPanel
+        canGoBack={drillDownHistory.length > 0}
+        data={drillDown}
+        errorMessage={drillDownError}
+        exportMessage={drillDownExportMessage}
+        explainErrorMessage={explainError}
+        explanation={explanation}
+        isExplaining={isExplaining}
+        isLoading={isDrillDownLoading}
+        isOpen={Boolean(drillDown || drillDownError || isDrillDownLoading)}
+        onBack={goBackDrillDown}
+        onClose={closeDrillDown}
+        onExplain={() => void explainCurrentDrillDown()}
+        onExportCsv={exportDrillDownCsv}
+        onExportExcel={exportDrillDownXlsx}
+        onPrint={printDrillDown}
+        onRowSelect={openRowDrillDown}
+      />
     </div>
   )
 }
