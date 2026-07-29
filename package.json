@@ -16,6 +16,7 @@
     "test:erp-intelligence": "node --test backend/erpIntelligenceService.test.js",
     "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
     "test:ollama": "node --test backend/ollamaService.test.js",
+    "test:pi-intelligence-pro": "node --test backend/piAnalyticsService.test.js backend/piSearchService.test.js backend/piInsightService.test.js",
     "test:phase1": "node --test backend/phase1VerificationService.test.js",
     "test:pi-commercial": "node --test backend/piCommercialService.test.js",
     "test:pi-summary": "node --test backend/piSummaryService.test.js",

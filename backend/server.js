@@ -22,6 +22,15 @@ import {
   askOllama,
   checkOllamaHealth,
 } from './ollamaService.js'
+import {
+  getPIIntelligenceProDashboard,
+  getRankingByPeriod,
+} from './piAnalyticsService.js'
+import { getPIManagementInsight } from './piInsightService.js'
+import {
+  getSafePIDetail,
+  searchPIs,
+} from './piSearchService.js'
 import { createWhatsappPIRouter } from './whatsappPi.js'
 
 const { Pool } = pg
@@ -52,6 +61,7 @@ const ERP_INTELLIGENCE_TABLE_NAMES = {
   company: COMPANY_TABLE_NAME,
   customer: CUSTOMER_TABLE_NAME,
   piMaster: RMKT_PI_MASTER_TABLE_NAME,
+  piTran: RMKT_PI_TRAN_TABLE_NAME,
   user: USER_TABLE_NAME,
   userRights: USER_RIGHTS_TABLE_NAME,
 }
@@ -2902,6 +2912,176 @@ app.get('/api/ai/erp/dashboard', async (request, response) => {
     response.status(500).json({
       message: 'Unable to load the PI Intelligence dashboard.',
       module: 'PI Intelligence',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/erp/dashboard/pro', async (request, response) => {
+  try {
+    const access = await requireERPIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    const dashboard = await getPIIntelligenceProDashboard({
+      queryable: pool,
+      tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    })
+
+    response.json(dashboard)
+  } catch (error) {
+    console.error('AUTOPAL ERP Intelligence Pro dashboard failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load the PI Intelligence Pro dashboard.',
+      module: 'PI Intelligence Pro',
+      success: false,
+    })
+  }
+})
+
+const loadPIRanking = async (request, response, ranking) => {
+  const access = await requireERPIntelligenceUser(request, response)
+
+  if (!access) {
+    return
+  }
+
+  const result = await getRankingByPeriod({
+    endDate: request.query.endDate,
+    limit: request.query.limit,
+    period: request.query.period,
+    queryable: pool,
+    ranking,
+    startDate: request.query.startDate,
+    tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+  })
+
+  response.status(result.statusCode ?? 200).json({
+    ...result,
+    statusCode: undefined,
+    success: !result.error,
+  })
+}
+
+app.get('/api/ai/erp/rankings/customers', async (request, response) => {
+  try {
+    await loadPIRanking(request, response, 'customer')
+  } catch (error) {
+    console.error('AUTOPAL customer PI ranking failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load customer PI ranking.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/erp/rankings/companies', async (request, response) => {
+  try {
+    await loadPIRanking(request, response, 'company')
+  } catch (error) {
+    console.error('AUTOPAL company PI ranking failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load company PI ranking.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/erp/pi-search', async (request, response) => {
+  try {
+    const access = await requireERPIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    const result = await searchPIs({
+      company: request.query.company,
+      customer: request.query.customer,
+      endDate: request.query.endDate,
+      limit: request.query.limit,
+      q: request.query.q,
+      queryable: pool,
+      startDate: request.query.startDate,
+      status: request.query.status,
+      tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    })
+
+    response.status(result.statusCode ?? 200).json({
+      ...result,
+      statusCode: undefined,
+      success: !result.error,
+    })
+  } catch (error) {
+    console.error('AUTOPAL PI search failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to search PIs.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/erp/pi/:piNumber', async (request, response) => {
+  try {
+    const access = await requireERPIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    const result = await getSafePIDetail({
+      piNumber: request.params.piNumber,
+      queryable: pool,
+      tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    })
+
+    response.status(result.statusCode ?? 200).json({
+      ...result,
+      statusCode: undefined,
+      success: !result.error,
+    })
+  } catch (error) {
+    console.error('AUTOPAL PI detail lookup failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load PI detail.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/erp/insight', async (request, response) => {
+  try {
+    const access = await requireERPIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    const result = await getPIManagementInsight({
+      queryable: pool,
+      tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    })
+
+    response.json(result)
+  } catch (error) {
+    console.error('AUTOPAL PI management insight failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to create PI management insight.',
+      module: 'PI Intelligence Pro',
       success: false,
     })
   }

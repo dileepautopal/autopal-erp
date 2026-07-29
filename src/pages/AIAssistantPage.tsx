@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
@@ -47,9 +48,48 @@ const suggestedERPPrompts = [
   'Show pending PI summary',
   'Show the latest PIs',
   'Show PI summary for this month',
+  'Which customer has the highest PI value this month?',
+  'Show top 10 customers by PI value.',
+  'What is the average PI value this month?',
+  'Which day had the highest PI value?',
+  'Show PI trend for the last 30 days.',
+  'Show company-wise PI summary.',
+  'Search PI number AML-0012.',
+  'Give me a management PI insight.',
 ]
 
 type HealthStatus = 'checking' | 'ready' | 'unavailable'
+
+type SpeechRecognitionEventLike = {
+  results: {
+    [index: number]: {
+      [index: number]: {
+        transcript?: string
+      }
+    }
+    length: number
+  }
+}
+
+type SpeechRecognitionLike = {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  onend: (() => void) | null
+  onerror: ((event: { error?: string }) => void) | null
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null
+  start: () => void
+  stop: () => void
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor
+    webkitSpeechRecognition?: SpeechRecognitionConstructor
+  }
+}
 
 type AIAssistantPageProps = {
   canUseERPIntelligence: boolean
@@ -145,6 +185,9 @@ export function AIAssistantPage({
   const [isLoading, setIsLoading] = useState(false)
   const [health, setHealth] = useState<AIHealthResponse | null>(null)
   const [healthStatus, setHealthStatus] = useState<HealthStatus>('checking')
+  const [voiceMessage, setVoiceMessage] = useState('')
+  const [isListening, setIsListening] = useState(false)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
 
   const trimmedQuestion = question.trim()
   const charactersUsed = question.length
@@ -154,6 +197,11 @@ export function AIAssistantPage({
   const answer = useMemo(() => String(result?.answer ?? '').trim(), [result])
   const erpRows = Array.isArray(result?.data?.rows) ? result.data.rows : []
   const erpColumns = getERPTableColumns(erpRows)
+  const SpeechRecognition =
+    typeof window === 'undefined'
+      ? undefined
+      : window.SpeechRecognition ?? window.webkitSpeechRecognition
+  const isVoiceSupported = Boolean(SpeechRecognition)
 
   const loadHealth = useCallback(async () => {
     setHealthStatus('checking')
@@ -170,6 +218,14 @@ export function AIAssistantPage({
 
     return () => window.clearTimeout(timer)
   }, [loadHealth])
+
+  useEffect(
+    () => () => {
+      recognitionRef.current?.stop()
+      recognitionRef.current = null
+    },
+    [],
+  )
 
   const submitQuestion = async () => {
     if (!trimmedQuestion) {
@@ -232,6 +288,52 @@ export function AIAssistantPage({
     setQuestion('')
     setResult(null)
     setErrorMessage('')
+    setVoiceMessage('')
+  }
+
+  const startVoiceInput = () => {
+    if (!SpeechRecognition || isListening) {
+      return
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = false
+    recognition.lang = 'en-IN'
+    recognition.onresult = (event) => {
+      const transcript = Array.from({ length: event.results.length })
+        .map((_, index) => event.results[index]?.[0]?.transcript ?? '')
+        .join(' ')
+        .trim()
+
+      if (transcript) {
+        setQuestion(transcript)
+        setVoiceMessage('Voice text captured. Review it, then click Ask AI.')
+        setErrorMessage('')
+      }
+    }
+    recognition.onerror = (event) => {
+      setVoiceMessage(
+        event.error
+          ? `Voice input stopped: ${event.error}.`
+          : 'Voice input could not be captured.',
+      )
+      setIsListening(false)
+    }
+    recognition.onend = () => {
+      setIsListening(false)
+      recognitionRef.current = null
+    }
+
+    recognitionRef.current = recognition
+    setIsListening(true)
+    setVoiceMessage('Listening...')
+    recognition.start()
+  }
+
+  const stopVoiceInput = () => {
+    recognitionRef.current?.stop()
+    setIsListening(false)
   }
 
   return (
@@ -337,10 +439,27 @@ export function AIAssistantPage({
             <Button disabled={!canSubmit} type="submit">
               {isLoading ? 'Thinking...' : 'Ask AI'}
             </Button>
+            {isVoiceSupported ? (
+              <Button
+                disabled={isLoading}
+                onClick={isListening ? stopVoiceInput : startVoiceInput}
+                variant="secondary"
+              >
+                {isListening ? 'Stop Voice' : 'Voice Input'}
+              </Button>
+            ) : (
+              <Button disabled variant="secondary">
+                Voice Unsupported
+              </Button>
+            )}
             <Button disabled={isLoading} onClick={clearAssistant} variant="ghost">
               Clear
             </Button>
           </div>
+
+          {voiceMessage ? (
+            <p className="ai-voice-message">{voiceMessage}</p>
+          ) : null}
         </form>
 
         <section className="panel ai-assistant-answer-panel" aria-live="polite">

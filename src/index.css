@@ -1099,6 +1099,199 @@ body,
   height: 100%;
 }
 
+.pi-intelligence-period {
+  align-items: center;
+  background: #fff7ed;
+  border: 1px solid rgba(234, 88, 12, 0.2);
+  border-radius: 8px;
+  color: #7c2d12;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.pi-intelligence-period strong,
+.pi-intelligence-period span {
+  font-size: 0.88rem;
+  font-weight: 900;
+}
+
+.pi-intelligence-tabs {
+  align-items: center;
+  background: #fff7e8;
+  border: 1px solid #f0d5a3;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.pi-intelligence-tabs button {
+  background: transparent;
+  border: 0;
+  border-right: 1px solid #f0d5a3;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.pi-intelligence-tabs button.active {
+  background: var(--autopal-red);
+  color: #fff;
+}
+
+.pi-intelligence-chart-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pi-intelligence-wide-chart {
+  grid-column: 1 / -1;
+}
+
+.pi-intelligence-highlight-list {
+  display: grid;
+  gap: 12px;
+}
+
+.pi-intelligence-highlight-list > div {
+  background: #fffdf9;
+  border: 1px solid rgba(181, 18, 27, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.pi-intelligence-highlight-list span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pi-intelligence-highlight-list strong {
+  color: var(--ink);
+  font-size: 0.96rem;
+}
+
+.pi-intelligence-highlight-list small {
+  color: var(--autopal-red-dark);
+  font-weight: 900;
+}
+
+.pi-intelligence-split-bars {
+  display: grid;
+  gap: 14px;
+}
+
+.pi-intelligence-split-bars div {
+  display: grid;
+  gap: 7px;
+}
+
+.pi-intelligence-split-bars span,
+.pi-intelligence-split-bars strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pi-intelligence-split-bars i {
+  background: linear-gradient(90deg, var(--autopal-red), var(--autopal-saffron));
+  border-radius: 999px;
+  display: block;
+  height: 14px;
+  min-width: 2px;
+}
+
+.pi-intelligence-filter-grid,
+.pi-intelligence-search-form {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.pi-intelligence-filter-grid label,
+.pi-intelligence-search-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pi-intelligence-filter-grid span,
+.pi-intelligence-search-form span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pi-intelligence-filter-grid input,
+.pi-intelligence-filter-grid select,
+.pi-intelligence-search-form input,
+.pi-intelligence-search-form select {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  min-height: 42px;
+  padding: 9px 11px;
+  width: 100%;
+}
+
+.pi-intelligence-search-actions {
+  align-items: end;
+  display: flex;
+  gap: 10px;
+}
+
+.pi-intelligence-note {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 750;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+
+.pi-intelligence-detail {
+  background: #fffdf9;
+  border: 1px solid rgba(181, 18, 27, 0.14);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+}
+
+.pi-intelligence-detail h2 {
+  color: var(--autopal-red-dark);
+  font-size: 20px;
+  margin: 0;
+}
+
+.pi-intelligence-detail p {
+  color: var(--muted);
+  font-weight: 800;
+  margin: 0;
+}
+
+.pi-intelligence-insight {
+  min-height: 180px;
+}
+
+.ai-voice-message {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+  margin: 0;
+}
+
 .accent-red {
   border-color: #ffc8cc;
   background: linear-gradient(135deg, #fff, var(--autopal-red-soft));
@@ -3746,6 +3939,8 @@ body,
   .summary-strip,
   .dashboard-grid,
   .dashboard-chart-grid,
+  .pi-intelligence-filter-grid,
+  .pi-intelligence-search-form,
   .two-columns,
   .prospective-grid,
   .customer-master-controls,
@@ -3950,6 +4145,21 @@ body,
   .dashboard-tab-list {
     display: flex;
     width: 100%;
+  }
+
+  .pi-intelligence-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .pi-intelligence-tabs button {
+    border-bottom: 1px solid #f0d5a3;
+  }
+
+  .pi-intelligence-search-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .dashboard-tab-list button {

@@ -2,6 +2,12 @@ import { apiUrl } from '../config/api'
 
 const AI_ASK_URL = apiUrl('/api/ai/ask')
 const AI_ERP_DASHBOARD_URL = apiUrl('/api/ai/erp/dashboard')
+const AI_ERP_PRO_DASHBOARD_URL = apiUrl('/api/ai/erp/dashboard/pro')
+const AI_ERP_CUSTOMER_RANKING_URL = apiUrl('/api/ai/erp/rankings/customers')
+const AI_ERP_COMPANY_RANKING_URL = apiUrl('/api/ai/erp/rankings/companies')
+const AI_ERP_PI_SEARCH_URL = apiUrl('/api/ai/erp/pi-search')
+const AI_ERP_PI_DETAIL_URL = apiUrl('/api/ai/erp/pi')
+const AI_ERP_INSIGHT_URL = apiUrl('/api/ai/erp/insight')
 const AI_HEALTH_URL = apiUrl('/api/ai/health')
 const REQUEST_TIMEOUT_MS = 150_000
 
@@ -31,14 +37,25 @@ export type AIChatResponse = {
 }
 
 export type AIERPRow = {
+  averagePIValue?: number
   companyName?: string
   count?: number
   customerName?: string
   date?: string
+  finalCount?: number
+  finalValue?: number
+  grandTotal?: number
+  lastPIDate?: string
+  name?: string
+  openCount?: number
+  openValue?: number
   piDate?: string
+  piCount?: number
   piNumber?: string
+  rank?: number
   status?: string
   totalValue?: number
+  totalPIValue?: number
   value?: number
 }
 
@@ -102,6 +119,124 @@ export type PIIntelligenceDashboardResponse = {
   latestPIs?: PIIntelligenceLatestPI[]
   dailySummary?: PIIntelligenceDailySummary[]
   message?: string
+}
+
+export type PIIntelligenceStatusMetric = PIIntelligenceMetric & {
+  percentage: number
+  valuePercentage?: number
+}
+
+export type PIIntelligenceRankingRow = {
+  averagePIValue: number
+  finalCount: number
+  finalValue?: number
+  lastPIDate: string
+  name: string
+  openCount: number
+  openValue?: number
+  piCount: number
+  rank: number
+  totalPIValue: number
+}
+
+export type PIIntelligenceTrendRow = {
+  count: number
+  date: string
+  value: number
+}
+
+export type PIIntelligenceProDashboardResponse = {
+  success: boolean
+  module?: string
+  generatedAt?: string
+  timezone?: string
+  period?: {
+    today?: string
+    yesterday?: string
+    weekStart?: string
+    weekEnd?: string
+    monthStart?: string
+    monthEnd?: string
+  }
+  kpis?: {
+    today?: PIIntelligenceMetric
+    yesterday?: PIIntelligenceMetric
+    week?: PIIntelligenceMetric
+    month?: PIIntelligenceMetric
+    averagePIValueMonth?: number
+    highestPIValueMonth?: number
+    lowestPIValueMonth?: number
+    averageDailyPICountMonth?: number
+    averageDailyPIValueMonth?: number
+    open?: PIIntelligenceStatusMetric
+    final?: PIIntelligenceStatusMetric
+  }
+  topCustomer?: PIIntelligenceRankingRow | null
+  topCompany?: PIIntelligenceRankingRow | null
+  bestDayByCount?: PIIntelligenceTrendRow | null
+  bestDayByValue?: PIIntelligenceTrendRow | null
+  trend?: PIIntelligenceTrendRow[]
+  topCustomers?: PIIntelligenceRankingRow[]
+  companyRanking?: PIIntelligenceRankingRow[]
+  latestPIs?: PIIntelligenceLatestPI[]
+  message?: string
+}
+
+export type PIIntelligenceRankingResponse = {
+  success: boolean
+  error?: string
+  message?: string
+  rows?: PIIntelligenceRankingRow[]
+  groupNote?: string
+  startDate?: string
+  endDate?: string
+  limit?: number
+}
+
+export type PISearchFilters = {
+  company?: string
+  customer?: string
+  endDate?: string
+  limit?: number
+  q?: string
+  startDate?: string
+  status?: string
+}
+
+export type PISearchResponse = {
+  success: boolean
+  error?: string
+  message?: string
+  limit?: number
+  q?: string
+  rows?: PIIntelligenceLatestPI[]
+}
+
+export type PIDetailLine = {
+  amount: number
+  productCode: string
+  productDescription: string
+  quantity: number
+  rate: number
+}
+
+export type PIDetailResponse = PIIntelligenceLatestPI & {
+  success: boolean
+  error?: string
+  message?: string
+  lines?: PIDetailLine[]
+}
+
+export type PIManagementInsightResponse = {
+  success: boolean
+  generatedAt?: string
+  insight?: string
+  message?: string
+  model?: string | null
+  module?: string
+  timezone?: string
+  verifiedData?: Record<string, unknown>
+  wordingMode?: string
 }
 
 const withTimeout = () => {
@@ -260,3 +395,140 @@ export const getPIIntelligenceDashboard = async (
     timeout.clear()
   }
 }
+
+const buildQueryString = (params: Record<string, string | number | undefined>) => {
+  const searchParams = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') {
+      searchParams.set(key, String(value))
+    }
+  })
+
+  const queryString = searchParams.toString()
+
+  return queryString ? `?${queryString}` : ''
+}
+
+const buildUserHeaders = (options: AskAIOptions = {}) => {
+  const headers: Record<string, string> = {}
+
+  if (options.userName) {
+    headers['x-autopal-user'] = options.userName
+  }
+
+  return headers
+}
+
+const fetchERPJson = async <T>(
+  url: string,
+  options: AskAIOptions & RequestInit = {},
+): Promise<T> => {
+  const timeout = withTimeout()
+  const headers = {
+    ...buildUserHeaders(options),
+    ...(options.headers as Record<string, string> | undefined),
+  }
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      signal: timeout.signal,
+    })
+    const body = await parseJsonResponse<T & { message?: string; error?: string }>(
+      response,
+    )
+
+    if (!response.ok) {
+      throw new Error(
+        body.message || body.error || 'The PI Intelligence request failed.',
+      )
+    }
+
+    return body
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('PI Intelligence request timed out.', {
+        cause: error,
+      })
+    }
+
+    if (error instanceof TypeError) {
+      throw new Error('PI Intelligence service is unavailable.', {
+        cause: error,
+      })
+    }
+
+    throw error
+  } finally {
+    timeout.clear()
+  }
+}
+
+export const getPIIntelligenceProDashboard = (
+  options: AskAIOptions = {},
+): Promise<PIIntelligenceProDashboardResponse> =>
+  fetchERPJson<PIIntelligenceProDashboardResponse>(AI_ERP_PRO_DASHBOARD_URL, {
+    method: 'GET',
+    ...options,
+  })
+
+export const getPICustomerRanking = (
+  params: PISearchFilters & { period?: string } = {},
+  options: AskAIOptions = {},
+): Promise<PIIntelligenceRankingResponse> =>
+  fetchERPJson<PIIntelligenceRankingResponse>(
+    `${AI_ERP_CUSTOMER_RANKING_URL}${buildQueryString(params)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const getPICompanyRanking = (
+  params: PISearchFilters & { period?: string } = {},
+  options: AskAIOptions = {},
+): Promise<PIIntelligenceRankingResponse> =>
+  fetchERPJson<PIIntelligenceRankingResponse>(
+    `${AI_ERP_COMPANY_RANKING_URL}${buildQueryString(params)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const searchPIs = (
+  params: PISearchFilters,
+  options: AskAIOptions = {},
+): Promise<PISearchResponse> =>
+  fetchERPJson<PISearchResponse>(
+    `${AI_ERP_PI_SEARCH_URL}${buildQueryString(params)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const getPIDetail = (
+  piNumber: string,
+  options: AskAIOptions = {},
+): Promise<PIDetailResponse> =>
+  fetchERPJson<PIDetailResponse>(
+    `${AI_ERP_PI_DETAIL_URL}/${encodeURIComponent(piNumber)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const getPIManagementInsight = (
+  options: AskAIOptions = {},
+): Promise<PIManagementInsightResponse> =>
+  fetchERPJson<PIManagementInsightResponse>(AI_ERP_INSIGHT_URL, {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+    ...options,
+  })

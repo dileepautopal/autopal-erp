@@ -2,11 +2,20 @@ import {
   askOllama,
   OLLAMA_MODEL,
 } from './ollamaService.js'
+import {
+  PI_PRO_INTENTS,
+  buildPIAnalyticsAnswer,
+  classifyPIAnalyticsQuestion,
+  getPIAnalyticsForIntent,
+} from './piAnalyticsService.js'
+import { getPIManagementInsight } from './piInsightService.js'
+import { searchPIs } from './piSearchService.js'
 
 export const ERP_INTELLIGENCE_SCREEN_ID = 'ai-erp-intelligence'
 
 export const ERP_INTENTS = {
   GENERAL_AI_QUESTION: 'general_ai_question',
+  ...PI_PRO_INTENTS,
   PI_COMPANY_SUMMARY: 'pi_company_summary',
   PI_COUNT_MONTH: 'pi_count_month',
   PI_COUNT_TODAY: 'pi_count_today',
@@ -353,6 +362,13 @@ export const classifyERPQuestion = (question, options = {}) => {
 
   const explicitRange = extractExplicitDateRange(originalQuestion)
   const monthRange = getMonthRange(today)
+  const piAnalyticsClassification = classifyPIAnalyticsQuestion(originalQuestion, {
+    today,
+  })
+
+  if (piAnalyticsClassification) {
+    return piAnalyticsClassification
+  }
 
   if (/\b(latest|recent|last)\b/i.test(text)) {
     return {
@@ -954,10 +970,43 @@ export const getCompanyPISummary = async ({
   }
 }
 
-const runApprovedERPFunction = async ({ classification, queryable, tableNames }) => {
+const runApprovedERPFunction = async ({
+  classification,
+  modelWording,
+  queryable,
+  tableNames,
+  today,
+  useModelWording,
+}) => {
   const parameters = classification.parameters ?? {}
+  const piAnalyticsResult = await getPIAnalyticsForIntent({
+    classification,
+    queryable,
+    tableNames,
+  })
+
+  if (piAnalyticsResult) {
+    return piAnalyticsResult
+  }
 
   switch (classification.intent) {
+    case ERP_INTENTS.PI_SMART_SEARCH:
+      return searchPIs({
+        limit: parameters.limit,
+        q: parameters.q,
+        queryable,
+        tableNames,
+      })
+
+    case ERP_INTENTS.PI_MANAGEMENT_INSIGHT:
+      return getPIManagementInsight({
+        modelWording,
+        queryable,
+        tableNames,
+        today,
+        useModelWording,
+      })
+
     case ERP_INTENTS.PI_COUNT_TODAY:
     case ERP_INTENTS.PI_COUNT_MONTH:
       return getPICountForDateRange({
@@ -1055,7 +1104,21 @@ const formatNumber = (value) =>
   }).format(toNumber(value))
 
 export const buildDeterministicERPAnswer = ({ data, intent }) => {
+  const piAnalyticsAnswer = buildPIAnalyticsAnswer({ data, intent })
+
+  if (piAnalyticsAnswer) {
+    return piAnalyticsAnswer
+  }
+
   switch (intent) {
+    case ERP_INTENTS.PI_SMART_SEARCH:
+      return data.rows?.length
+        ? `Found ${formatNumber(data.rows.length)} matching PI record(s).`
+        : 'No matching PI records were found.'
+
+    case ERP_INTENTS.PI_MANAGEMENT_INSIGHT:
+      return data.insight || 'Management insight is available.'
+
     case ERP_INTENTS.PI_COUNT_TODAY:
       return `Today, ${formatNumber(data.count)} Proforma Invoices were generated.`
 
@@ -1243,8 +1306,11 @@ export const processERPQuestion = async ({
 
   const data = await runApprovedERPFunction({
     classification,
+    modelWording,
     queryable,
     tableNames,
+    today,
+    useModelWording,
   })
 
   if (data.error) {
@@ -1263,11 +1329,13 @@ export const processERPQuestion = async ({
     data,
     intent: classification.intent,
   })
-  let answer = fallbackAnswer
-  let model = null
-  let wordingMode = 'server-fallback'
+  let answer = data.answer || data.insight || fallbackAnswer
+  let model = data.model ?? null
+  let wordingMode = data.wordingMode ?? 'server-fallback'
+  const allowModelWording =
+    useModelWording && classification.intent !== ERP_INTENTS.PI_MANAGEMENT_INSIGHT
 
-  if (useModelWording) {
+  if (allowModelWording) {
     try {
       const modelResult = await getModelERPAnswer({
         data,
