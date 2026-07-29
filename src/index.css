@@ -1118,6 +1118,78 @@ body,
   font-weight: 900;
 }
 
+.pi-report-export-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.pi-report-export-grid {
+  align-items: end;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(210px, 0.8fr) minmax(240px, 1fr) minmax(220px, auto);
+}
+
+.pi-report-export-grid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pi-report-export-grid label > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pi-report-export-grid input,
+.pi-report-export-grid select {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  min-height: 42px;
+  padding: 9px 11px;
+  width: 100%;
+}
+
+.pi-report-export-meta {
+  align-content: center;
+  background: #fff7ed;
+  border: 1px solid rgba(234, 88, 12, 0.2);
+  border-radius: 8px;
+  color: #7c2d12;
+  display: grid;
+  font-size: 12px;
+  font-weight: 900;
+  gap: 3px;
+  min-height: 42px;
+  padding: 7px 11px;
+}
+
+.pi-report-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pi-report-export-hint,
+.pi-report-export-message {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+  margin: 0;
+}
+
+.pi-report-export-message {
+  color: #166534;
+}
+
+.pi-report-export-message.error {
+  color: #be123c;
+}
+
 .pi-intelligence-tabs {
   align-items: center;
   background: #fff7e8;
@@ -3939,6 +4011,7 @@ body,
   .summary-strip,
   .dashboard-grid,
   .dashboard-chart-grid,
+  .pi-report-export-grid,
   .pi-intelligence-filter-grid,
   .pi-intelligence-search-form,
   .two-columns,
@@ -4115,6 +4188,7 @@ body,
   .summary-strip,
   .dashboard-grid,
   .dashboard-chart-grid,
+  .pi-report-export-grid,
   .two-columns,
   .create-pi-header-grid,
   .prospective-grid,
@@ -4160,6 +4234,10 @@ body,
   .pi-intelligence-search-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .pi-report-export-actions .btn {
+    width: 100%;
   }
 
   .dashboard-tab-list button {
@@ -5022,5 +5100,90 @@ body,
   .create-pi-print-preview {
     display: block;
     margin: 0;
+  }
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+    size: A4 portrait;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  .pi-intelligence-page .page-header {
+    border-bottom: 2px solid #d30a13;
+    display: flex !important;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+  }
+
+  .pi-intelligence-page .header-actions,
+  .pi-report-export-panel,
+  .pi-intelligence-tabs,
+  .pi-intelligence-filter-grid,
+  .pi-intelligence-search-form,
+  .pi-intelligence-search-actions,
+  .pi-intelligence-page .btn {
+    display: none !important;
+  }
+
+  .pi-intelligence-page {
+    color: #000;
+    display: block;
+    max-width: none;
+  }
+
+  .pi-intelligence-period,
+  .pi-intelligence-panel,
+  .dashboard-chart-card,
+  .pi-intelligence-detail,
+  .pi-intelligence-metric {
+    background: #fff !important;
+    border: 1px solid #999 !important;
+    box-shadow: none !important;
+    color: #000 !important;
+    page-break-inside: avoid;
+  }
+
+  .pi-intelligence-table-wrap {
+    border: 0;
+    overflow: visible;
+  }
+
+  .pi-intelligence-table {
+    border-collapse: collapse;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pi-intelligence-table th,
+  .pi-intelligence-table td {
+    background: #fff !important;
+    border: 1px solid #777;
+    color: #000 !important;
+    font-size: 8.5pt;
+    padding: 4pt;
+  }
+
+  .pi-intelligence-table thead {
+    display: table-header-group;
+  }
+
+  .pi-intelligence-table tr,
+  .pi-intelligence-day-row {
+    page-break-inside: avoid;
+  }
+
+  .pi-intelligence-page::after {
+    bottom: 5mm;
+    color: #7f1d1d;
+    content: "AUTOPAL PI Intelligence - Read-only Live ERP Report";
+    font-size: 8pt;
+    left: 12mm;
+    position: fixed;
   }
 }

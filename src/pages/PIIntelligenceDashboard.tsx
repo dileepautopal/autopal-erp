@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { PIReportExportPanel } from '../components/PIReportExportPanel'
 import { Button } from '../components/ui/Button'
 import {
   getPICompanyRanking,
@@ -417,6 +418,7 @@ export function PIIntelligenceDashboard({
   const trendRows = getRows(dashboard?.trend)
   const topCustomers = getRows(dashboard?.topCustomers)
   const companyRows = getRows(dashboard?.companyRanking)
+  const searchRows = getRows(searchResult?.rows)
   const customerRows = getRows(customerRanking?.rows).length
     ? getRows(customerRanking?.rows)
     : topCustomers
@@ -599,6 +601,23 @@ export function PIIntelligenceDashboard({
           </span>
         </section>
       ) : null}
+
+      <PIReportExportPanel
+        activeTab={activeTab}
+        companyRows={companyRankingRows}
+        customEndDate={customEndDate}
+        customStartDate={customStartDate}
+        customerRows={customerRows}
+        dashboard={dashboard}
+        generatedBy={currentUserName}
+        insight={insight}
+        lastRefreshedAt={lastRefreshedAt}
+        rankingLimit={rankingLimit}
+        rankingPeriod={rankingPeriod}
+        searchFilters={searchFilters}
+        searchRows={searchRows}
+        selectedDetail={selectedDetail}
+      />
 
       {errorMessage ? (
         <section className="pi-intelligence-error" role="alert">
@@ -934,7 +953,7 @@ export function PIIntelligenceDashboard({
           ) : null}
           <LatestPITable
             onView={(piNumber) => void viewPIDetail(piNumber)}
-            rows={getRows(searchResult?.rows)}
+            rows={searchRows}
           />
           {selectedDetail ? (
             <section className="pi-intelligence-detail">

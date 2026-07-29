@@ -19,6 +19,7 @@
     "test:pi-intelligence-pro": "node --test backend/piAnalyticsService.test.js backend/piSearchService.test.js backend/piInsightService.test.js",
     "test:phase1": "node --test backend/phase1VerificationService.test.js",
     "test:pi-commercial": "node --test backend/piCommercialService.test.js",
+    "test:pi-report-export": "node --test backend/piReportExportService.test.js",
     "test:pi-summary": "node --test backend/piSummaryService.test.js",
     "test:whatsapp-ack": "node --test backend/whatsappAckService.test.js",
     "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
