@@ -11,6 +11,21 @@ import express from 'express'
 import pg from 'pg'
 import { createAITestConsoleRouter } from './aiTestConsole.js'
 import {
+  COMMERCIAL_PERMISSION_ID,
+  classifyCommercialQuestion,
+  getCommercialComparison,
+  getCommercialConcentration,
+  getCommercialDashboard,
+  getCommercialManagementBrief,
+  getCompanyCommercialIntelligence,
+  getCustomerCommercialIntelligence,
+  getInactiveCustomers,
+  getProductCommercialIntelligence,
+  getReactivatedCustomers,
+  processCommercialQuestion,
+  verifyCommercialIntelligenceAccess,
+} from './commercialIntelligenceService.js'
+import {
   classifyERPQuestion,
   ERP_INTELLIGENCE_SCREEN_ID,
   ERP_INTENTS,
@@ -62,6 +77,7 @@ const ERP_INTELLIGENCE_TABLE_NAMES = {
   customer: CUSTOMER_TABLE_NAME,
   piMaster: RMKT_PI_MASTER_TABLE_NAME,
   piTran: RMKT_PI_TRAN_TABLE_NAME,
+  product: PRODUCT_TABLE_NAME,
   user: USER_TABLE_NAME,
   userRights: USER_RIGHTS_TABLE_NAME,
 }
@@ -106,6 +122,7 @@ const MENU_SCREEN_IDS = [
   'customer-discounts',
   'ai-assistant',
   ERP_INTELLIGENCE_SCREEN_ID,
+  COMMERCIAL_PERMISSION_ID,
   'admin-panel',
   ...(AI_TEST_CONSOLE_ENABLED ? ['ai-test-console'] : []),
 ]
@@ -116,7 +133,8 @@ const DEFAULT_USER_SCREEN_IDS = MENU_SCREEN_IDS.filter(
   (screenId) =>
     screenId !== 'admin-panel' &&
     screenId !== 'ai-test-console' &&
-    screenId !== ERP_INTELLIGENCE_SCREEN_ID,
+    screenId !== ERP_INTELLIGENCE_SCREEN_ID &&
+    screenId !== COMMERCIAL_PERMISSION_ID,
 )
 
 const useDatabaseSSL =
@@ -2833,6 +2851,25 @@ const requireERPIntelligenceUser = async (request, response) => {
   return access
 }
 
+const requireCommercialIntelligenceUser = async (request, response) => {
+  const access = await verifyCommercialIntelligenceAccess({
+    queryable: pool,
+    tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    userName: getERPRequestUserName(request),
+  })
+
+  if (!access.authorized) {
+    response.status(403).json({
+      message: access.message || 'AI Commercial Intelligence access is required.',
+      mode: 'commercial',
+      success: false,
+    })
+    return null
+  }
+
+  return access
+}
+
 const sendERPIntelligenceResult = (response, result) => {
   response.status(result.statusCode ?? (result.success ? 200 : 422)).json({
     ...result,
@@ -3087,8 +3124,325 @@ app.post('/api/ai/erp/insight', async (request, response) => {
   }
 })
 
+const getCommercialRequestOptions = (request) => ({
+  comparisonMode: request.query.comparisonMode,
+  days: request.query.days,
+  endDate: request.query.endDate,
+  limit: request.query.limit,
+  period: request.query.period,
+  queryable: pool,
+  startDate: request.query.startDate,
+  tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+})
+
+const sendCommercialResult = (response, result) => {
+  response.status(result.statusCode ?? (result.success ? 200 : 422)).json({
+    ...result,
+    statusCode: undefined,
+  })
+}
+
+app.get('/api/ai/commercial/dashboard', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getCommercialDashboard(getCommercialRequestOptions(request)),
+    )
+  } catch (error) {
+    console.error('AUTOPAL commercial dashboard failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load Commercial Intelligence dashboard.',
+      module: 'Commercial PI Intelligence',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/comparison', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getCommercialComparison(getCommercialRequestOptions(request)),
+    )
+  } catch (error) {
+    console.error('AUTOPAL commercial comparison failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load commercial period comparison.',
+      success: false,
+    })
+  }
+})
+
+const loadCommercialCustomers = async (request, response, segment = 'all') => {
+  const access = await requireCommercialIntelligenceUser(request, response)
+
+  if (!access) {
+    return
+  }
+
+  sendCommercialResult(
+    response,
+    await getCustomerCommercialIntelligence({
+      ...getCommercialRequestOptions(request),
+      segment,
+    }),
+  )
+}
+
+app.get('/api/ai/commercial/customers', async (request, response) => {
+  try {
+    await loadCommercialCustomers(request, response)
+  } catch (error) {
+    console.error('AUTOPAL customer commercial intelligence failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load customer commercial intelligence.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/customers/growing', async (request, response) => {
+  try {
+    await loadCommercialCustomers(request, response, 'growing')
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load growing customers.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/customers/declining', async (request, response) => {
+  try {
+    await loadCommercialCustomers(request, response, 'declining')
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load declining customers.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/customers/inactive', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getInactiveCustomers(getCommercialRequestOptions(request)),
+    )
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load inactive customers.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/customers/reactivated', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getReactivatedCustomers(getCommercialRequestOptions(request)),
+    )
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load reactivated customers.',
+      success: false,
+    })
+  }
+})
+
+const loadCommercialProducts = async (request, response, segment = 'all') => {
+  const access = await requireCommercialIntelligenceUser(request, response)
+
+  if (!access) {
+    return
+  }
+
+  sendCommercialResult(
+    response,
+    await getProductCommercialIntelligence({
+      ...getCommercialRequestOptions(request),
+      segment,
+      sortBy: request.query.sortBy,
+    }),
+  )
+}
+
+app.get('/api/ai/commercial/products', async (request, response) => {
+  try {
+    await loadCommercialProducts(request, response)
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load product commercial intelligence.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/products/growing', async (request, response) => {
+  try {
+    await loadCommercialProducts(request, response, 'growing')
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load growing products.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/products/declining', async (request, response) => {
+  try {
+    await loadCommercialProducts(request, response, 'declining')
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load declining products.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/companies', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getCompanyCommercialIntelligence(getCommercialRequestOptions(request)),
+    )
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load company commercial intelligence.',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/commercial/concentration', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getCommercialConcentration(getCommercialRequestOptions(request)),
+    )
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to load commercial concentration.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/commercial/brief', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await getCommercialManagementBrief({
+        comparisonMode: request.body?.comparisonMode,
+        endDate: request.body?.endDate,
+        period: request.body?.period,
+        queryable: pool,
+        startDate: request.body?.startDate,
+        tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+      }),
+    )
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to create commercial management brief.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/commercial/ask', async (request, response) => {
+  try {
+    const access = await requireCommercialIntelligenceUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendCommercialResult(
+      response,
+      await processCommercialQuestion({
+        queryable: pool,
+        question: request.body?.question,
+        tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+      }),
+    )
+  } catch (error) {
+    response.status(500).json({
+      message: 'Unable to process commercial intelligence question.',
+      success: false,
+    })
+  }
+})
+
 app.post('/api/ai/ask', async (request, response) => {
   try {
+    const commercialClassification = classifyCommercialQuestion(request.body?.question)
+
+    if (commercialClassification.intent !== 'general_ai_question') {
+      const access = await requireCommercialIntelligenceUser(request, response)
+
+      if (!access) {
+        return
+      }
+
+      const result = await processCommercialQuestion({
+        queryable: pool,
+        question: request.body?.question,
+        tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+      })
+
+      sendCommercialResult(response, result)
+      return
+    }
+
     const classification = classifyERPQuestion(request.body?.question)
 
     if (classification.intent !== ERP_INTENTS.GENERAL_AI_QUESTION) {

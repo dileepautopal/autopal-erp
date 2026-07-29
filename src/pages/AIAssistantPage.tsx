@@ -58,6 +58,19 @@ const suggestedERPPrompts = [
   'Give me a management PI insight.',
 ]
 
+const suggestedCommercialPrompts = [
+  'How is PI value this month compared with last month?',
+  'Which customers are growing?',
+  'Which customers have reduced PI activity?',
+  'Show customers with no PI for 90 days.',
+  'Which customers became active again?',
+  'Show top products by PI line value.',
+  'Which product had the highest PI quantity?',
+  'Which company has the highest PI activity?',
+  'What percentage of PI value comes from the top customer?',
+  'Give me a commercial management brief.',
+]
+
 type HealthStatus = 'checking' | 'ready' | 'unavailable'
 
 type SpeechRecognitionEventLike = {
@@ -92,6 +105,7 @@ declare global {
 }
 
 type AIAssistantPageProps = {
+  canUseCommercialIntelligence: boolean
   canUseERPIntelligence: boolean
   currentUserName: string
 }
@@ -148,6 +162,37 @@ const getERPTableColumns = (rows: AIERPRow[]) => {
     ] as const
   }
 
+  if (rows.some((row) => row.productCode || row.productDescription)) {
+    return [
+      ['productCode', 'Product Code'],
+      ['productDescription', 'Product'],
+      ['classification', 'Classification'],
+      ['totalPILineValue', 'PI Line Value'],
+      ['currentPIValue', 'Current PI Value'],
+      ['previousPIValue', 'Previous PI Value'],
+    ] as const
+  }
+
+  if (rows.some((row) => row.customerName && row.currentPIValue !== undefined)) {
+    return [
+      ['customerName', 'Customer'],
+      ['classification', 'Classification'],
+      ['currentPIValue', 'Current PI Value'],
+      ['previousPIValue', 'Previous PI Value'],
+      ['openValue', 'Open PI Value'],
+    ] as const
+  }
+
+  if (rows.some((row) => row.companyName && row.currentPIValue !== undefined)) {
+    return [
+      ['companyName', 'Company'],
+      ['currentPIValue', 'Current PI Value'],
+      ['previousPIValue', 'Previous PI Value'],
+      ['openValue', 'Open PI Value'],
+      ['finalValue', 'Final PI Value'],
+    ] as const
+  }
+
   if (rows.some((row) => row.date)) {
     return [
       ['date', 'Date'],
@@ -164,18 +209,27 @@ const getERPTableColumns = (rows: AIERPRow[]) => {
 }
 
 const renderERPCell = (row: AIERPRow, key: keyof AIERPRow) => {
-  if (key === 'value' || key === 'totalValue') {
+  if (
+    key === 'currentPIValue' ||
+    key === 'finalValue' ||
+    key === 'openValue' ||
+    key === 'previousPIValue' ||
+    key === 'totalPILineValue' ||
+    key === 'totalValue' ||
+    key === 'value'
+  ) {
     return formatERPValue(row[key])
   }
 
-  if (key === 'count') {
-    return new Intl.NumberFormat('en-IN').format(Number(row.count ?? 0))
+  if (key === 'count' || key === 'piCount') {
+    return new Intl.NumberFormat('en-IN').format(Number(row[key] ?? 0))
   }
 
   return String(row[key] ?? '-')
 }
 
 export function AIAssistantPage({
+  canUseCommercialIntelligence,
   canUseERPIntelligence,
   currentUserName,
 }: AIAssistantPageProps) {
@@ -358,13 +412,14 @@ export function AIAssistantPage({
       </header>
 
       <section className="ai-assistant-notice">
-        <strong>Phase 4 notice:</strong>
+        <strong>Phase 5 notice:</strong>
         <span>
           General AI drafting does not access live ERP data. Authorised PI
-          Intelligence questions use limited read-only live PI data only. Stock,
-          balances and customer records are not connected. Review answers before
-          use and do not enter passwords, bank details or highly sensitive
-          personal data.
+          Intelligence and Commercial Intelligence questions use limited read-only
+          PI data only. PI value is not actual sales, revenue, dispatch or
+          payment. Stock, balances and customer records are not connected. Review
+          answers before use and do not enter passwords, bank details or highly
+          sensitive personal data.
         </span>
       </section>
 
@@ -426,6 +481,27 @@ export function AIAssistantPage({
             {suggestedERPPrompts.map((prompt) => (
               <button
                 disabled={isLoading || !canUseERPIntelligence}
+                key={prompt}
+                onClick={() => selectSuggestedPrompt(prompt)}
+                type="button"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          <div className="ai-erp-prompts" aria-label="Commercial Intelligence prompts">
+            <div>
+              <strong>Commercial Intelligence</strong>
+              <span>
+                {canUseCommercialIntelligence
+                  ? 'Live read-only commercial PI activity'
+                  : 'Ask admin to grant AI Commercial Intelligence access'}
+              </span>
+            </div>
+            {suggestedCommercialPrompts.map((prompt) => (
+              <button
+                disabled={isLoading || !canUseCommercialIntelligence}
                 key={prompt}
                 onClick={() => selectSuggestedPrompt(prompt)}
                 type="button"

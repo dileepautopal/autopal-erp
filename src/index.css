@@ -1357,6 +1357,23 @@ body,
   min-height: 180px;
 }
 
+.commercial-intelligence-page {
+  max-width: 1440px;
+}
+
+.commercial-intelligence-disclaimer {
+  justify-content: flex-start;
+}
+
+.commercial-intelligence-disclaimer span {
+  flex: 1;
+  min-width: 260px;
+}
+
+.commercial-export-grid {
+  margin-top: 16px;
+}
+
 .ai-voice-message {
   color: var(--muted);
   font-size: 0.86rem;

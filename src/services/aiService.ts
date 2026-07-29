@@ -8,12 +8,14 @@ const AI_ERP_COMPANY_RANKING_URL = apiUrl('/api/ai/erp/rankings/companies')
 const AI_ERP_PI_SEARCH_URL = apiUrl('/api/ai/erp/pi-search')
 const AI_ERP_PI_DETAIL_URL = apiUrl('/api/ai/erp/pi')
 const AI_ERP_INSIGHT_URL = apiUrl('/api/ai/erp/insight')
+const AI_COMMERCIAL_DASHBOARD_URL = apiUrl('/api/ai/commercial/dashboard')
+const AI_COMMERCIAL_BRIEF_URL = apiUrl('/api/ai/commercial/brief')
 const AI_HEALTH_URL = apiUrl('/api/ai/health')
 const REQUEST_TIMEOUT_MS = 150_000
 
 export type AIChatResponse = {
   success: boolean
-  mode?: 'general' | 'erp'
+  mode?: 'general' | 'erp' | 'commercial'
   intent?: string
   answer?: string
   data?: AIERPData
@@ -40,8 +42,13 @@ export type AIERPRow = {
   averagePIValue?: number
   companyName?: string
   count?: number
+  currentPIValue?: number
   customerName?: string
   date?: string
+  classification?: string
+  productCode?: string
+  productDescription?: string
+  totalPILineValue?: number
   finalCount?: number
   finalValue?: number
   grandTotal?: number
@@ -52,6 +59,7 @@ export type AIERPRow = {
   piDate?: string
   piCount?: number
   piNumber?: string
+  previousPIValue?: number
   rank?: number
   status?: string
   totalValue?: number
@@ -231,6 +239,188 @@ export type PIManagementInsightResponse = {
   success: boolean
   generatedAt?: string
   insight?: string
+  message?: string
+  model?: string | null
+  module?: string
+  timezone?: string
+  verifiedData?: Record<string, unknown>
+  wordingMode?: string
+}
+
+export type CommercialPeriod = {
+  days?: number
+  endDate?: string
+  label?: string
+  startDate?: string
+}
+
+export type CommercialChange = {
+  absoluteChange?: number
+  changePercentage?: number | null
+  direction?: 'up' | 'down' | 'flat' | 'new' | string
+}
+
+export type CommercialMetric = {
+  averagePIValue?: number
+  count: number
+  finalCount?: number
+  finalValue?: number
+  openCount?: number
+  openValue?: number
+  value: number
+}
+
+export type CommercialComparison = {
+  countChange?: CommercialChange
+  current?: CommercialMetric
+  previous?: CommercialMetric
+  valueChange?: CommercialChange
+}
+
+export type CommercialCustomerRow = {
+  averagePIValue?: number
+  classification?: string
+  countChange?: number
+  countRank?: number
+  currentPICount?: number
+  currentPIValue: number
+  customerCode?: number
+  customerName: string
+  finalPICount?: number
+  finalPIValue?: number
+  firstPIDate?: string
+  growthPercentage?: number | null
+  highestPIValue?: number
+  historicalPICount?: number
+  historicalPIValue?: number
+  lastPIDate?: string
+  lowestPIValue?: number
+  openPICount?: number
+  openPIValue?: number
+  previousPICount?: number
+  previousPIValue?: number
+  rankByPICount?: number
+  rankByPIValue?: number
+  shareOfTotalPIValue?: number
+  valueChange?: number
+  valueChangeAvailable?: boolean
+  valueChangeReason?: string
+}
+
+export type CommercialInactiveCustomerRow = {
+  customerCode?: number
+  customerName: string
+  daysInactive?: number
+  historicalPICount?: number
+  historicalPIValue?: number
+  lastPIDate?: string
+}
+
+export type CommercialReactivatedCustomerRow = {
+  customerCode?: number
+  customerName: string
+  historicalPICount?: number
+  inactiveGapDays?: number
+  latestPIDate?: string
+  latestPINumber?: string
+  latestPIValue?: number
+}
+
+export type CommercialProductRow = {
+  averageQuantityPerPI?: number
+  averageRate?: number
+  classification?: string
+  currentPeriodQuantity?: number
+  currentPeriodValue?: number
+  distinctCustomers?: number
+  distinctPIs?: number
+  growthPercentage?: number | null
+  latestPIDate?: string
+  lineCount?: number
+  previousPeriodQuantity?: number
+  previousPeriodValue?: number
+  productCode: string
+  productDescription: string
+  quantityGrowthPercentage?: number | null
+  rankByPILineValue?: number
+  rankByQuantity?: number
+  shareOfTotalPILineValue?: number
+  totalPILineValue: number
+  totalQuantity: number
+  valueChange?: number
+  valueChangeAvailable?: boolean
+  valueChangeReason?: string
+}
+
+export type CommercialCompanyRow = {
+  averagePIValue?: number
+  companyCode?: number
+  countGrowthPercentage?: number | null
+  companyName: string
+  currentPICount?: number
+  currentPIValue: number
+  finalPICount?: number
+  finalPIValue?: number
+  lastPIDate?: string
+  openPICount?: number
+  openPIValue?: number
+  previousPICount?: number
+  previousPIValue?: number
+  rank: number
+  shareOfTotalPIValue?: number
+  valueGrowthPercentage?: number | null
+}
+
+export type CommercialDashboardParams = {
+  comparisonMode?: string
+  endDate?: string
+  period?: string
+  startDate?: string
+}
+
+export type CommercialDashboardResponse = {
+  success: boolean
+  comparison?: CommercialComparison
+  comparisonMode?: string
+  comparisonPeriod?: CommercialPeriod
+  concentration?: {
+    company?: Record<string, unknown>
+    customer?: Record<string, unknown>
+    product?: Record<string, unknown>
+  }
+  customerSummary?: {
+    declining?: CommercialCustomerRow[]
+    growing?: CommercialCustomerRow[]
+    inactive?: CommercialInactiveCustomerRow[]
+    ranking?: CommercialCustomerRow[]
+    reactivated?: CommercialReactivatedCustomerRow[]
+    topByOpenValue?: CommercialCustomerRow[]
+  }
+  productSummary?: {
+    declining?: CommercialProductRow[]
+    growing?: CommercialProductRow[]
+    ranking?: CommercialProductRow[]
+    topByQuantity?: CommercialProductRow[]
+  }
+  companySummary?: {
+    ranking?: CommercialCompanyRow[]
+  }
+  disclaimer?: string
+  generatedAt?: string
+  message?: string
+  module?: string
+  period?: CommercialPeriod
+  productDataQuality?: Record<string, unknown>
+  managementBrief?: string | null
+  thresholds?: Record<string, unknown>
+  timezone?: string
+}
+
+export type CommercialBriefResponse = {
+  success: boolean
+  brief?: string
+  disclaimer?: string
+  generatedAt?: string
   message?: string
   model?: string | null
   module?: string
@@ -526,6 +716,31 @@ export const getPIManagementInsight = (
   options: AskAIOptions = {},
 ): Promise<PIManagementInsightResponse> =>
   fetchERPJson<PIManagementInsightResponse>(AI_ERP_INSIGHT_URL, {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+    ...options,
+  })
+
+export const getCommercialDashboard = (
+  params: CommercialDashboardParams = {},
+  options: AskAIOptions = {},
+): Promise<CommercialDashboardResponse> =>
+  fetchERPJson<CommercialDashboardResponse>(
+    `${AI_COMMERCIAL_DASHBOARD_URL}${buildQueryString(params)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const getCommercialManagementBrief = (
+  params: CommercialDashboardParams = {},
+  options: AskAIOptions = {},
+): Promise<CommercialBriefResponse> =>
+  fetchERPJson<CommercialBriefResponse>(AI_COMMERCIAL_BRIEF_URL, {
+    body: JSON.stringify(params),
     headers: {
       'Content-Type': 'application/json',
     },

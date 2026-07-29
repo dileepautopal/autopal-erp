@@ -24,6 +24,11 @@ export const navItems: NavItem[] = [
   { id: 'customer-discounts', label: 'Customer Discounts', meta: 'Scheme master' },
   { id: 'ai-assistant', label: 'AI Assistant', meta: 'Business drafts' },
   { id: 'pi-intelligence', label: 'PI Intelligence', meta: 'Live PI dashboard' },
+  {
+    id: 'commercial-intelligence',
+    label: 'Commercial Intelligence',
+    meta: 'PI pipeline analysis',
+  },
   { id: 'admin-panel', label: 'Admin Panel', meta: 'Users & rights' },
   ...(isAITestConsoleEnabled
     ? [
@@ -37,11 +42,19 @@ export const navItems: NavItem[] = [
 ]
 
 export const rightItems: NavItem[] = [
-  ...navItems.filter((item) => item.id !== 'pi-intelligence'),
+  ...navItems.filter(
+    (item) =>
+      item.id !== 'pi-intelligence' && item.id !== 'commercial-intelligence',
+  ),
   {
     id: 'ai-erp-intelligence',
     label: 'AI ERP Intelligence',
     meta: 'Live PI reports',
+  },
+  {
+    id: 'ai-commercial-intelligence',
+    label: 'AI Commercial Intelligence',
+    meta: 'Commercial PI reports',
   },
 ]
 

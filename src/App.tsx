@@ -3,6 +3,7 @@ import { AppShell } from './components/layout/AppShell'
 import { AdminPanel } from './pages/AdminPanel'
 import { AIAssistantPage } from './pages/AIAssistantPage'
 import { AICommunicationTestConsole } from './pages/AICommunicationTestConsole'
+import { CommercialIntelligenceDashboard } from './pages/CommercialIntelligenceDashboard'
 import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
@@ -34,10 +35,12 @@ const STATIC_LEGAL_PAGE_PATHS: Record<LegalPagePath, string> = {
 const AI_TEST_CONSOLE_PATH = '/admin/ai-communication-test-console'
 const AI_ASSISTANT_PATH = '/ai-assistant'
 const PI_INTELLIGENCE_PATH = '/pi-intelligence'
+const COMMERCIAL_INTELLIGENCE_PATH = '/commercial-intelligence'
 const DEFAULT_EXCLUDED_RIGHTS: ScreenId[] = [
   'admin-panel',
   'ai-test-console',
   'ai-erp-intelligence',
+  'ai-commercial-intelligence',
 ]
 const getDefaultRights = (isAdmin = false) =>
   rightItems
@@ -220,7 +223,9 @@ const normalizeSessionRights = (rights?: ScreenId[], isAdmin = false) => {
 const hasScreenAccess = (session: UserSession, screen: ScreenId) =>
   screen === 'pi-intelligence'
     ? session.rights.includes('ai-erp-intelligence')
-    : session.rights.includes(screen)
+    : screen === 'commercial-intelligence'
+      ? session.rights.includes('ai-commercial-intelligence')
+      : session.rights.includes(screen)
 
 const canOpenScreen = (session: UserSession, screen: ScreenId) =>
   hasScreenAccess(session, screen) &&
@@ -233,6 +238,10 @@ const getScreenPath = (screen: ScreenId) => {
 
   if (screen === 'pi-intelligence') {
     return PI_INTELLIGENCE_PATH
+  }
+
+  if (screen === 'commercial-intelligence') {
+    return COMMERCIAL_INTELLIGENCE_PATH
   }
 
   if (screen === 'ai-test-console') {
@@ -578,6 +587,9 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       {currentScreen === 'customer-discounts' && <CustomerDiscountMaster />}
       {currentScreen === 'ai-assistant' && (
         <AIAssistantPage
+          canUseCommercialIntelligence={loginSession.rights.includes(
+            'ai-commercial-intelligence',
+          )}
           canUseERPIntelligence={loginSession.rights.includes(
             'ai-erp-intelligence',
           )}
@@ -586,6 +598,9 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       )}
       {currentScreen === 'pi-intelligence' && (
         <PIIntelligenceDashboard currentUserName={loginSession.userName} />
+      )}
+      {currentScreen === 'commercial-intelligence' && (
+        <CommercialIntelligenceDashboard currentUserName={loginSession.userName} />
       )}
       {currentScreen === 'admin-panel' && (
         <AdminPanel currentUserName={loginSession.userName} />
@@ -623,6 +638,10 @@ function App() {
 
   if (currentPath === PI_INTELLIGENCE_PATH) {
     return <AuthenticatedApp initialScreen="pi-intelligence" />
+  }
+
+  if (currentPath === COMMERCIAL_INTELLIGENCE_PATH) {
+    return <AuthenticatedApp initialScreen="commercial-intelligence" />
   }
 
   if (isLegalPagePath(currentPath)) {

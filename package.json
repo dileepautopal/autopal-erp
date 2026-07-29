@@ -13,6 +13,7 @@
     "test:ai-console": "node scripts/test-ai-test-console.mjs",
     "test:company-selection": "node --test backend/companySelectionService.test.js",
     "test:customer-matcher": "node --test backend/customerFuzzyMatch.test.js",
+    "test:commercial-intelligence": "node --test backend/commercialIntelligenceService.test.js",
     "test:erp-intelligence": "node --test backend/erpIntelligenceService.test.js",
     "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
     "test:ollama": "node --test backend/ollamaService.test.js",

@@ -11,7 +11,9 @@ export type ScreenId =
   | 'customer-discounts'
   | 'ai-assistant'
   | 'pi-intelligence'
+  | 'commercial-intelligence'
   | 'ai-erp-intelligence'
+  | 'ai-commercial-intelligence'
   | 'admin-panel'
   | 'ai-test-console'
 
