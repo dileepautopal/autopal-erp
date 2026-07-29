@@ -1374,6 +1374,96 @@ body,
   margin-top: 16px;
 }
 
+.executive-cockpit-page {
+  max-width: 1540px;
+}
+
+.executive-disclaimer {
+  justify-content: flex-start;
+}
+
+.executive-disclaimer span {
+  flex: 1;
+  min-width: 260px;
+}
+
+.executive-kpi-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.executive-alert-list {
+  display: grid;
+  gap: 10px;
+}
+
+.executive-alert {
+  background: #fffdf9;
+  border: 1px solid rgba(181, 18, 27, 0.16);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.executive-alert span {
+  align-self: start;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+
+.executive-alert strong {
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.executive-alert.high {
+  border-color: #e23d46;
+}
+
+.executive-alert.high span {
+  background: var(--autopal-red);
+  color: #fff;
+}
+
+.executive-alert.attention {
+  border-color: #f2b544;
+}
+
+.executive-alert.attention span {
+  background: var(--autopal-saffron);
+  color: #321500;
+}
+
+.executive-alert.info span {
+  background: #f3f4f6;
+  color: var(--muted);
+}
+
+.executive-prompt-list {
+  margin-bottom: 14px;
+}
+
+.executive-question-form {
+  display: grid;
+  gap: 12px;
+}
+
+.executive-question-answer {
+  margin-top: 14px;
+  min-height: 96px;
+  white-space: pre-wrap;
+}
+
+.executive-export-grid {
+  align-items: end;
+  margin-top: 16px;
+}
+
 .ai-voice-message {
   color: var(--muted);
   font-size: 0.86rem;
@@ -5202,5 +5292,9 @@ body,
     font-size: 8pt;
     left: 12mm;
     position: fixed;
+  }
+
+  .executive-cockpit-page::after {
+    content: "AUTOPAL Executive AI Cockpit - Read-only PI-based Report";
   }
 }

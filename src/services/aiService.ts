@@ -10,12 +10,15 @@ const AI_ERP_PI_DETAIL_URL = apiUrl('/api/ai/erp/pi')
 const AI_ERP_INSIGHT_URL = apiUrl('/api/ai/erp/insight')
 const AI_COMMERCIAL_DASHBOARD_URL = apiUrl('/api/ai/commercial/dashboard')
 const AI_COMMERCIAL_BRIEF_URL = apiUrl('/api/ai/commercial/brief')
+const AI_EXECUTIVE_COCKPIT_URL = apiUrl('/api/ai/executive/cockpit')
+const AI_EXECUTIVE_BRIEF_URL = apiUrl('/api/ai/executive/brief')
+const AI_EXECUTIVE_ASK_URL = apiUrl('/api/ai/executive/ask')
 const AI_HEALTH_URL = apiUrl('/api/ai/health')
 const REQUEST_TIMEOUT_MS = 150_000
 
 export type AIChatResponse = {
   success: boolean
-  mode?: 'general' | 'erp' | 'commercial'
+  mode?: 'general' | 'erp' | 'commercial' | 'executive'
   intent?: string
   answer?: string
   data?: AIERPData
@@ -429,6 +432,131 @@ export type CommercialBriefResponse = {
   wordingMode?: string
 }
 
+export type ExecutiveKpis = {
+  averageDailyPICount?: number
+  averageDailyPIValue?: number
+  averagePIValue?: number
+  commercialConcentrationLabel?: string
+  finalPercentage?: number
+  finalPICount?: number
+  finalPIValue?: number
+  highestPIValue?: number
+  lowestPIValue?: number
+  monthlyCountChangePercentage?: number | null
+  monthlyValueChangePercentage?: number | null
+  openPercentage?: number
+  openPICount?: number
+  openPIValue?: number
+  previousMonthPICount?: number
+  previousMonthPIValue?: number
+  thisMonthPICount?: number
+  thisMonthPIValue?: number
+  thisWeekPICount?: number
+  thisWeekPIValue?: number
+  todayPICount?: number
+  todayPIValue?: number
+  topCompany?: string
+  topCompanyPIValue?: number
+  topCustomer?: string
+  topCustomerPIValue?: number
+  topCustomerSharePercentage?: number
+  topProduct?: string
+  topProductPILineValue?: number
+  yesterdayPICount?: number
+  yesterdayPIValue?: number
+}
+
+export type ExecutiveAlert = {
+  data?: Record<string, unknown>
+  message: string
+  severity: 'high' | 'attention' | 'info' | string
+  type: string
+}
+
+export type ExecutiveTrendRow = {
+  count: number
+  date: string
+  value: number
+}
+
+export type ExecutiveCockpitResponse = {
+  success: boolean
+  activityHighlights?: {
+    inactiveCount?: number
+    inactiveCustomers?: CommercialInactiveCustomerRow[]
+    reactivatedCount?: number
+    reactivatedCustomers?: CommercialReactivatedCustomerRow[]
+  }
+  alerts?: ExecutiveAlert[]
+  comparisonPeriod?: CommercialPeriod
+  companyHighlights?: {
+    rows?: CommercialCompanyRow[]
+    topCompany?: CommercialCompanyRow | null
+  }
+  concentration?: {
+    company?: Record<string, unknown>
+    customer?: Record<string, unknown>
+    product?: Record<string, unknown>
+    thresholds?: Record<string, unknown>
+  }
+  customerHighlights?: {
+    rows?: CommercialCustomerRow[]
+    topCustomer?: CommercialCustomerRow | null
+  }
+  disclaimer?: string
+  executiveBrief?: string | null
+  generatedAt?: string
+  growthHighlights?: {
+    customerStatusCounts?: Record<string, number>
+    decliningCustomerCount?: number
+    decliningCustomers?: CommercialCustomerRow[]
+    decliningProductCount?: number
+    decliningProducts?: CommercialProductRow[]
+    growingCustomerCount?: number
+    growingCustomers?: CommercialCustomerRow[]
+    growingProductCount?: number
+    growingProducts?: CommercialProductRow[]
+    newCustomerCount?: number
+    stableCustomerCount?: number
+  }
+  kpis?: ExecutiveKpis
+  largePIs?: PIIntelligenceLatestPI[]
+  message?: string
+  module?: string
+  period?: CommercialPeriod
+  productHighlights?: {
+    dataQuality?: Record<string, unknown>
+    rows?: CommercialProductRow[]
+    topProduct?: CommercialProductRow | null
+  }
+  status?: {
+    final?: PIIntelligenceStatusMetric
+    open?: PIIntelligenceStatusMetric
+  }
+  thresholds?: Record<string, unknown>
+  timezone?: string
+  today?: string
+  trend?: ExecutiveTrendRow[]
+}
+
+export type ExecutiveBriefResponse = {
+  success: boolean
+  brief?: string
+  disclaimer?: string
+  generatedAt?: string
+  message?: string
+  model?: string | null
+  module?: string
+  timezone?: string
+  verifiedData?: Record<string, unknown>
+  wordingMode?: string
+}
+
+export type ExecutiveQuestionResponse = AIChatResponse & {
+  data?: ExecutiveCockpitResponse | ExecutiveBriefResponse
+  mode?: 'executive'
+}
+
 const withTimeout = () => {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -741,6 +869,48 @@ export const getCommercialManagementBrief = (
 ): Promise<CommercialBriefResponse> =>
   fetchERPJson<CommercialBriefResponse>(AI_COMMERCIAL_BRIEF_URL, {
     body: JSON.stringify(params),
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+    ...options,
+  })
+
+export const getExecutiveCockpit = (
+  params: CommercialDashboardParams = {},
+  options: AskAIOptions = {},
+): Promise<ExecutiveCockpitResponse> =>
+  fetchERPJson<ExecutiveCockpitResponse>(
+    `${AI_EXECUTIVE_COCKPIT_URL}${buildQueryString(params)}`,
+    {
+      method: 'GET',
+      ...options,
+    },
+  )
+
+export const getExecutiveBrief = (
+  params: CommercialDashboardParams = {},
+  options: AskAIOptions = {},
+): Promise<ExecutiveBriefResponse> =>
+  fetchERPJson<ExecutiveBriefResponse>(AI_EXECUTIVE_BRIEF_URL, {
+    body: JSON.stringify(params),
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+    ...options,
+  })
+
+export const askExecutiveQuestion = (
+  question: string,
+  params: CommercialDashboardParams = {},
+  options: AskAIOptions = {},
+): Promise<ExecutiveQuestionResponse> =>
+  fetchERPJson<ExecutiveQuestionResponse>(AI_EXECUTIVE_ASK_URL, {
+    body: JSON.stringify({
+      ...params,
+      question,
+    }),
     headers: {
       'Content-Type': 'application/json',
     },

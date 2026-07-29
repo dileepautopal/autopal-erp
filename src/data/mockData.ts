@@ -29,6 +29,11 @@ export const navItems: NavItem[] = [
     label: 'Commercial Intelligence',
     meta: 'PI pipeline analysis',
   },
+  {
+    id: 'executive-cockpit',
+    label: 'Executive AI Cockpit',
+    meta: 'Management cockpit',
+  },
   { id: 'admin-panel', label: 'Admin Panel', meta: 'Users & rights' },
   ...(isAITestConsoleEnabled
     ? [
@@ -44,7 +49,9 @@ export const navItems: NavItem[] = [
 export const rightItems: NavItem[] = [
   ...navItems.filter(
     (item) =>
-      item.id !== 'pi-intelligence' && item.id !== 'commercial-intelligence',
+      item.id !== 'pi-intelligence' &&
+      item.id !== 'commercial-intelligence' &&
+      item.id !== 'executive-cockpit',
   ),
   {
     id: 'ai-erp-intelligence',
@@ -55,6 +62,11 @@ export const rightItems: NavItem[] = [
     id: 'ai-commercial-intelligence',
     label: 'AI Commercial Intelligence',
     meta: 'Commercial PI reports',
+  },
+  {
+    id: 'ai-executive-cockpit',
+    label: 'AI Executive Cockpit',
+    meta: 'Executive PI cockpit',
   },
 ]
 

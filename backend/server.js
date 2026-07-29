@@ -26,6 +26,16 @@ import {
   verifyCommercialIntelligenceAccess,
 } from './commercialIntelligenceService.js'
 import {
+  EXECUTIVE_PERMISSION_ID,
+  getExecutiveCockpit,
+  verifyExecutiveCockpitAccess,
+} from './executiveCockpitService.js'
+import { getExecutiveBrief } from './executiveBriefService.js'
+import {
+  classifyExecutiveQuestion,
+  processExecutiveQuestion,
+} from './executiveIntentService.js'
+import {
   classifyERPQuestion,
   ERP_INTELLIGENCE_SCREEN_ID,
   ERP_INTENTS,
@@ -123,6 +133,7 @@ const MENU_SCREEN_IDS = [
   'ai-assistant',
   ERP_INTELLIGENCE_SCREEN_ID,
   COMMERCIAL_PERMISSION_ID,
+  EXECUTIVE_PERMISSION_ID,
   'admin-panel',
   ...(AI_TEST_CONSOLE_ENABLED ? ['ai-test-console'] : []),
 ]
@@ -134,7 +145,8 @@ const DEFAULT_USER_SCREEN_IDS = MENU_SCREEN_IDS.filter(
     screenId !== 'admin-panel' &&
     screenId !== 'ai-test-console' &&
     screenId !== ERP_INTELLIGENCE_SCREEN_ID &&
-    screenId !== COMMERCIAL_PERMISSION_ID,
+    screenId !== COMMERCIAL_PERMISSION_ID &&
+    screenId !== EXECUTIVE_PERMISSION_ID,
 )
 
 const useDatabaseSSL =
@@ -2870,6 +2882,25 @@ const requireCommercialIntelligenceUser = async (request, response) => {
   return access
 }
 
+const requireExecutiveCockpitUser = async (request, response) => {
+  const access = await verifyExecutiveCockpitAccess({
+    queryable: pool,
+    tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+    userName: getERPRequestUserName(request),
+  })
+
+  if (!access.authorized) {
+    response.status(403).json({
+      message: access.message || 'Executive AI Cockpit access is required.',
+      mode: 'executive',
+      success: false,
+    })
+    return null
+  }
+
+  return access
+}
+
 const sendERPIntelligenceResult = (response, result) => {
   response.status(result.statusCode ?? (result.success ? 200 : 422)).json({
     ...result,
@@ -3422,8 +3453,156 @@ app.post('/api/ai/commercial/ask', async (request, response) => {
   }
 })
 
+const getExecutiveRequestOptions = (request) => ({
+  comparisonMode: request.query.comparisonMode,
+  endDate: request.query.endDate,
+  period: request.query.period,
+  queryable: pool,
+  startDate: request.query.startDate,
+  tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+})
+
+const getExecutiveBodyOptions = (request) => ({
+  comparisonMode: request.body?.comparisonMode,
+  endDate: request.body?.endDate,
+  period: request.body?.period,
+  queryable: pool,
+  startDate: request.body?.startDate,
+  tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+})
+
+const sendExecutiveResult = (response, result) => {
+  response.status(result.statusCode ?? (result.success ? 200 : 422)).json({
+    ...result,
+    statusCode: undefined,
+  })
+}
+
+app.get('/api/ai/executive/cockpit', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendExecutiveResult(
+      response,
+      await getExecutiveCockpit(getExecutiveRequestOptions(request)),
+    )
+  } catch (error) {
+    console.error('AUTOPAL Executive AI Cockpit failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load Executive AI Cockpit.',
+      module: 'Executive AI Cockpit',
+      success: false,
+    })
+  }
+})
+
+app.get('/api/ai/executive/alerts', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    const cockpit = await getExecutiveCockpit(getExecutiveRequestOptions(request))
+
+    sendExecutiveResult(response, {
+      alerts: cockpit.alerts ?? [],
+      disclaimer: cockpit.disclaimer,
+      generatedAt: cockpit.generatedAt,
+      module: cockpit.module,
+      period: cockpit.period,
+      success: cockpit.success,
+      timezone: cockpit.timezone,
+    })
+  } catch (error) {
+    console.error('AUTOPAL Executive alerts failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to load Executive AI Cockpit alerts.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/executive/brief', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendExecutiveResult(
+      response,
+      await getExecutiveBrief(getExecutiveBodyOptions(request)),
+    )
+  } catch (error) {
+    console.error('AUTOPAL Executive brief failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to create Executive AI Cockpit brief.',
+      success: false,
+    })
+  }
+})
+
+app.post('/api/ai/executive/ask', async (request, response) => {
+  try {
+    const access = await requireExecutiveCockpitUser(request, response)
+
+    if (!access) {
+      return
+    }
+
+    sendExecutiveResult(
+      response,
+      await processExecutiveQuestion({
+        ...getExecutiveBodyOptions(request),
+        question: request.body?.question,
+      }),
+    )
+  } catch (error) {
+    console.error('AUTOPAL Executive question failed', {
+      message: error?.message,
+    })
+    response.status(500).json({
+      message: 'Unable to process Executive AI Cockpit question.',
+      success: false,
+    })
+  }
+})
+
 app.post('/api/ai/ask', async (request, response) => {
   try {
+    const executiveClassification = classifyExecutiveQuestion(request.body?.question)
+
+    if (executiveClassification.intent !== 'general_ai_question') {
+      const access = await requireExecutiveCockpitUser(request, response)
+
+      if (!access) {
+        return
+      }
+
+      sendExecutiveResult(
+        response,
+        await processExecutiveQuestion({
+          queryable: pool,
+          question: request.body?.question,
+          tableNames: ERP_INTELLIGENCE_TABLE_NAMES,
+        }),
+      )
+      return
+    }
+
     const commercialClassification = classifyCommercialQuestion(request.body?.question)
 
     if (commercialClassification.intent !== 'general_ai_question') {

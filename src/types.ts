@@ -12,8 +12,10 @@ export type ScreenId =
   | 'ai-assistant'
   | 'pi-intelligence'
   | 'commercial-intelligence'
+  | 'executive-cockpit'
   | 'ai-erp-intelligence'
   | 'ai-commercial-intelligence'
+  | 'ai-executive-cockpit'
   | 'admin-panel'
   | 'ai-test-console'
 

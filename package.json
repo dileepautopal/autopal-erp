@@ -15,6 +15,7 @@
     "test:customer-matcher": "node --test backend/customerFuzzyMatch.test.js",
     "test:commercial-intelligence": "node --test backend/commercialIntelligenceService.test.js",
     "test:erp-intelligence": "node --test backend/erpIntelligenceService.test.js",
+    "test:executive-cockpit": "node --test backend/executiveCockpitService.test.js",
     "test:meta-data-deletion": "node scripts/test-meta-data-deletion-callback.mjs",
     "test:ollama": "node --test backend/ollamaService.test.js",
     "test:pi-intelligence-pro": "node --test backend/piAnalyticsService.test.js backend/piSearchService.test.js backend/piInsightService.test.js",

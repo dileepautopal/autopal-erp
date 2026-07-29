@@ -8,6 +8,7 @@ import { CreatePI } from './pages/CreatePI'
 import { CustomerDiscountMaster } from './pages/CustomerDiscountMaster'
 import { CustomerMaster } from './pages/CustomerMaster'
 import { Dashboard } from './pages/Dashboard'
+import { ExecutiveAICockpit } from './pages/ExecutiveAICockpit'
 import {
   PublicNotFoundPage,
   isLegalPagePath,
@@ -36,11 +37,13 @@ const AI_TEST_CONSOLE_PATH = '/admin/ai-communication-test-console'
 const AI_ASSISTANT_PATH = '/ai-assistant'
 const PI_INTELLIGENCE_PATH = '/pi-intelligence'
 const COMMERCIAL_INTELLIGENCE_PATH = '/commercial-intelligence'
+const EXECUTIVE_COCKPIT_PATH = '/executive-cockpit'
 const DEFAULT_EXCLUDED_RIGHTS: ScreenId[] = [
   'admin-panel',
   'ai-test-console',
   'ai-erp-intelligence',
   'ai-commercial-intelligence',
+  'ai-executive-cockpit',
 ]
 const getDefaultRights = (isAdmin = false) =>
   rightItems
@@ -225,7 +228,9 @@ const hasScreenAccess = (session: UserSession, screen: ScreenId) =>
     ? session.rights.includes('ai-erp-intelligence')
     : screen === 'commercial-intelligence'
       ? session.rights.includes('ai-commercial-intelligence')
-      : session.rights.includes(screen)
+      : screen === 'executive-cockpit'
+        ? session.rights.includes('ai-executive-cockpit')
+        : session.rights.includes(screen)
 
 const canOpenScreen = (session: UserSession, screen: ScreenId) =>
   hasScreenAccess(session, screen) &&
@@ -242,6 +247,10 @@ const getScreenPath = (screen: ScreenId) => {
 
   if (screen === 'commercial-intelligence') {
     return COMMERCIAL_INTELLIGENCE_PATH
+  }
+
+  if (screen === 'executive-cockpit') {
+    return EXECUTIVE_COCKPIT_PATH
   }
 
   if (screen === 'ai-test-console') {
@@ -602,6 +611,9 @@ function AuthenticatedApp({ initialScreen = 'dashboard' }: { initialScreen?: Scr
       {currentScreen === 'commercial-intelligence' && (
         <CommercialIntelligenceDashboard currentUserName={loginSession.userName} />
       )}
+      {currentScreen === 'executive-cockpit' && (
+        <ExecutiveAICockpit currentUserName={loginSession.userName} />
+      )}
       {currentScreen === 'admin-panel' && (
         <AdminPanel currentUserName={loginSession.userName} />
       )}
@@ -642,6 +654,10 @@ function App() {
 
   if (currentPath === COMMERCIAL_INTELLIGENCE_PATH) {
     return <AuthenticatedApp initialScreen="commercial-intelligence" />
+  }
+
+  if (currentPath === EXECUTIVE_COCKPIT_PATH) {
+    return <AuthenticatedApp initialScreen="executive-cockpit" />
   }
 
   if (isLegalPagePath(currentPath)) {
