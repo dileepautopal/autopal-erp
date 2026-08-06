@@ -4,6 +4,15 @@ import {
   normalizePhoneDigits,
   sendTextMessage,
 } from './whatsappAckService.js'
+import {
+  MESSAGE_PURPOSES,
+  SEND_ATTEMPT_STATUSES,
+  SEND_FAILURE_CATEGORIES,
+} from './whatsappSendService.js'
+import {
+  logWhatsAppOutgoingEarlyReturn,
+  logWhatsAppOutgoingTrace,
+} from './whatsappOutgoingTrace.js'
 
 const INCOMING_MESSAGE_TABLE_NAME = 'tran_whatsapp_pi_messages'
 
@@ -13,12 +22,17 @@ const PI_SUMMARY_STATUSES = {
   FAILED: 'FAILED',
   NOT_REQUIRED: 'NOT_REQUIRED',
   PENDING: 'PENDING',
+  BLOCKED_BY_ACKNOWLEDGEMENT: 'BLOCKED_BY_ACKNOWLEDGEMENT',
+  PERMANENTLY_FAILED: 'PERMANENTLY_FAILED',
+  RETRY_SCHEDULED: 'RETRY_SCHEDULED',
   SENDING: 'SENDING',
   SENT: 'SENT',
   TEST_NUMBER_NOT_ALLOWED: 'TEST_NUMBER_NOT_ALLOWED',
+  WAITING_FOR_ACKNOWLEDGEMENT: 'WAITING_FOR_ACKNOWLEDGEMENT',
 }
 
 const CUSTOMER_CONFIRMATION_STATUSES = {
+  ALREADY_CONFIRMED: 'ALREADY_CONFIRMED',
   AWAITING_CONFIRMATION: 'AWAITING_CONFIRMATION',
   CHANGE_REQUESTED: 'CHANGE_REQUESTED',
   CONFIRMED: 'CONFIRMED',
@@ -28,6 +42,8 @@ const CUSTOMER_CONFIRMATION_STATUSES = {
 }
 
 const toText = (value) => String(value ?? '').trim()
+const CONFIRM_CUSTOMER_COMMAND_REGEX = /^\s*CONFIRM\s+([A-Z]+-\d+)\s*$/i
+const CHANGE_CUSTOMER_COMMAND_REGEX = /^\s*CHANGE\s+([A-Z]+-\d+)\b([\s\S]*)$/i
 
 const toNumberValue = (value, fallback = 0) => {
   const number = Number(value ?? fallback)
@@ -41,6 +57,15 @@ const parseBooleanEnv = (value, defaultValue = false) => {
   }
 
   return ['1', 'true', 'yes', 'y'].includes(toText(value).toLowerCase())
+}
+
+const logOutgoingPipeline = (event, details = {}) => {
+  logWhatsAppOutgoingTrace(event, {
+    currentFile: 'backend/piSummaryService.js',
+    currentFunction: details.currentFunction ?? 'piSummaryService',
+    messagePurpose: details.messagePurpose ?? MESSAGE_PURPOSES.PI_SUMMARY,
+    ...details,
+  })
 }
 
 const normalizeJSONList = (value) => {
@@ -340,6 +365,13 @@ const updatePiSummaryStatus = async (
   },
 ) => {
   await ensurePiSummarySchema(pool)
+  logOutgoingPipeline('Updating tran_whatsapp_pi_messages', {
+    currentFunction: 'updatePiSummaryStatus',
+    messagePurpose: 'PI_SUMMARY',
+    messageId,
+    piSummaryStatusUpdated: true,
+    status,
+  })
   await pool.query(
     `
       UPDATE ${INCOMING_MESSAGE_TABLE_NAME}
@@ -402,6 +434,16 @@ const validateSummaryPreconditions = ({
   sourceMessage,
 }) => {
   if (!config.enabled) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage?.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi?.piNumber,
+      reason: 'Draft PI summary sending is disabled.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Draft PI summary sending is disabled.',
       status: PI_SUMMARY_STATUSES.DISABLED,
@@ -409,6 +451,15 @@ const validateSummaryPreconditions = ({
   }
 
   if (!pi) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage?.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      reason: 'Draft PI was not found.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Draft PI was not found.',
       status: PI_SUMMARY_STATUSES.FAILED,
@@ -416,6 +467,16 @@ const validateSummaryPreconditions = ({
   }
 
   if (!pi.isDraft) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage?.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi.piNumber,
+      reason: 'Only Draft PI summaries can be sent.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Only Draft PI summaries can be sent.',
       status: PI_SUMMARY_STATUSES.NOT_REQUIRED,
@@ -423,16 +484,65 @@ const validateSummaryPreconditions = ({
   }
 
   if (!sourceMessage) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi?.piNumber,
+      reason: 'Source WhatsApp message was not found for this Draft PI.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Source WhatsApp message was not found for this Draft PI.',
       status: PI_SUMMARY_STATUSES.FAILED,
     }
   }
 
-  if (sourceMessage.acknowledgement_status !== 'SENT') {
+  if (
+    [
+      SEND_FAILURE_CATEGORIES.CONFIGURATION_ERROR,
+      SEND_FAILURE_CATEGORIES.INVALID_RECIPIENT,
+      SEND_FAILURE_CATEGORIES.PERMISSION_ERROR,
+      SEND_FAILURE_CATEGORIES.TEST_NUMBER_NOT_ALLOWED,
+      SEND_FAILURE_CATEGORIES.TOKEN_EXPIRED,
+      SEND_ATTEMPT_STATUSES.PERMANENTLY_FAILED,
+    ].includes(sourceMessage.acknowledgement_status)
+  ) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi.piNumber,
+      reason:
+        'Draft PI summary is blocked because automatic acknowledgement was not delivered.',
+      senderPhone,
+      sourceAcknowledgementStatus: sourceMessage.acknowledgement_status,
+    })
     return {
-      errorMessage: 'Automatic acknowledgement must be sent before Draft PI summary.',
-      status: PI_SUMMARY_STATUSES.NOT_REQUIRED,
+      errorMessage:
+        'Draft PI summary is blocked because automatic acknowledgement was not delivered.',
+      status: PI_SUMMARY_STATUSES.BLOCKED_BY_ACKNOWLEDGEMENT,
+    }
+  }
+
+  if (sourceMessage.acknowledgement_status !== 'SENT') {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi.piNumber,
+      reason: 'Draft PI summary is waiting for automatic acknowledgement.',
+      senderPhone,
+      sourceAcknowledgementStatus: sourceMessage.acknowledgement_status,
+    })
+    return {
+      errorMessage: 'Draft PI summary is waiting for automatic acknowledgement.',
+      status: PI_SUMMARY_STATUSES.WAITING_FOR_ACKNOWLEDGEMENT,
     }
   }
 
@@ -440,6 +550,17 @@ const validateSummaryPreconditions = ({
     sourceMessage.pi_summary_status === PI_SUMMARY_STATUSES.SENT ||
     sourceMessage.pi_summary_meta_message_id
   ) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi.piNumber,
+      reason: 'Draft PI summary was already sent.',
+      senderPhone,
+      sourcePiSummaryStatus: sourceMessage.pi_summary_status,
+    })
     return {
       errorMessage: 'Draft PI summary was already sent.',
       status: PI_SUMMARY_STATUSES.DUPLICATE_SKIPPED,
@@ -447,6 +568,16 @@ const validateSummaryPreconditions = ({
   }
 
   if (!normalizePhoneDigits(senderPhone)) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi.piNumber,
+      reason: 'Sender phone is required.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Sender phone is required.',
       status: PI_SUMMARY_STATUSES.FAILED,
@@ -454,16 +585,19 @@ const validateSummaryPreconditions = ({
   }
 
   if (toNumberValue(pi.grandTotal) <= 0) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'validateSummaryPreconditions',
+      destinationPhone: senderPhone,
+      messageId: sourceMessage.message_id,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi.piNumber,
+      reason: 'Grand total is missing or zero.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Grand total is missing or zero.',
       status: PI_SUMMARY_STATUSES.FAILED,
-    }
-  }
-
-  if (config.whatsapp.mode === 'development' && !isAllowedTesterNumber(senderPhone, config.whatsapp)) {
-    return {
-      errorMessage: 'Sender phone is not in WHATSAPP_ALLOWED_TEST_NUMBERS.',
-      status: PI_SUMMARY_STATUSES.TEST_NUMBER_NOT_ALLOWED,
     }
   }
 
@@ -498,7 +632,26 @@ const sendPiSummary = async ({
   })
   const sourceId = sourceMessage?.message_id || sourceMessageId
 
+  logOutgoingPipeline('PI summary function entered', {
+    currentFunction: 'sendPiSummary',
+    destinationPhone: senderPhone,
+    messageId: sourceId,
+    piNumber: pi?.piNumber,
+    senderPhone,
+  })
+
   if (precondition.status) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/piSummaryService.js',
+      currentFunction: 'sendPiSummary',
+      destinationPhone: senderPhone,
+      messageId: sourceId,
+      messagePurpose: MESSAGE_PURPOSES.PI_SUMMARY,
+      piNumber: pi?.piNumber,
+      reason: precondition.errorMessage,
+      senderPhone,
+      status: precondition.status,
+    })
     if (sourceId) {
       await updatePiSummaryStatus(pool, sourceId, {
         error: precondition.errorMessage,
@@ -520,31 +673,63 @@ const sendPiSummary = async ({
     message: messageBody,
     status: PI_SUMMARY_STATUSES.SENDING,
   })
+  logOutgoingPipeline('Starting PI summary', {
+    currentFunction: 'sendPiSummary',
+    destinationPhone: senderPhone,
+    messageId: sourceId,
+    piNumber: pi.piNumber,
+    senderPhone,
+    sharedSenderCalled: true,
+  })
   const sendResult = await sendTextMessage({
     body: messageBody,
     contextMessageId: sourceId,
     env,
     fetchImpl,
+    piNumber: pi.piNumber,
+    pool,
+    purpose: MESSAGE_PURPOSES.PI_SUMMARY,
+    sourceMessageRecordId: sourceMessage.id,
+    sourceWhatsappMessageId: sourceId,
     to: senderPhone,
   })
   const sentAt = sendResult.ok ? new Date().toISOString() : null
-  const status = sendResult.ok ? PI_SUMMARY_STATUSES.SENT : PI_SUMMARY_STATUSES.FAILED
+  const status = sendResult.ok
+    ? PI_SUMMARY_STATUSES.SENT
+    : sendResult.retryScheduled
+      ? PI_SUMMARY_STATUSES.RETRY_SCHEDULED
+      : PI_SUMMARY_STATUSES.PERMANENTLY_FAILED
 
   await updatePiSummaryStatus(pool, sourceId, {
-    error: sendResult.errorMessage ?? null,
+    error: sendResult.errorMessage
+      ? `${sendResult.failureCategory || sendResult.errorCode}: ${sendResult.errorMessage}`
+      : null,
     message: messageBody,
     metaMessageId: sendResult.metaMessageId ?? null,
     sentAt,
+    status,
+  })
+  logOutgoingPipeline('PI summary completed', {
+    currentFunction: 'sendPiSummary',
+    destinationPhone: senderPhone,
+    messageId: sourceId,
+    piNumber: pi.piNumber,
+    senderPhone,
+    sendLogId: sendResult.sendLogId,
+    sharedSenderCalled: true,
     status,
   })
 
   return {
     errorCode: sendResult.errorCode ?? '',
     errorMessage: sendResult.errorMessage ?? '',
+    failureCategory: sendResult.failureCategory ?? '',
     messageBody,
     metaMessageId: sendResult.metaMessageId ?? '',
     metaResponse: sendResult.metaResponse ?? null,
+    nextRetryAt: sendResult.nextRetryAt ?? null,
     ok: sendResult.ok,
+    retryScheduled: Boolean(sendResult.retryScheduled),
     status,
   }
 }
@@ -558,6 +743,13 @@ const sendPiSummaryForMessage = async ({
   tableNames = {},
 } = {}) => {
   const resolvedPiNumber = toText(piNumber || incomingMessageRecord?.draftPiNo)
+  logOutgoingPipeline('sendPiSummaryForMessage entered', {
+    currentFunction: 'sendPiSummaryForMessage',
+    destinationPhone: incomingMessageRecord?.senderPhone,
+    messageId: incomingMessageRecord?.messageId,
+    piNumber: resolvedPiNumber,
+    senderPhone: incomingMessageRecord?.senderPhone,
+  })
   const pi = await loadDraftPIForSummary({
     piNumber: resolvedPiNumber,
     pool,
@@ -586,6 +778,16 @@ The PI will now be reviewed internally before final approval.
 AUTOPAL ERP`
   }
 
+  if (status === CUSTOMER_CONFIRMATION_STATUSES.ALREADY_CONFIRMED) {
+    return `Thank you.
+
+Your confirmation for Draft PI ${piNumber} was already received.
+
+The PI is still under internal review before final approval.
+
+AUTOPAL ERP`
+  }
+
   if (status === CUSTOMER_CONFIRMATION_STATUSES.CHANGE_REQUESTED) {
     return `Thank you.
 
@@ -605,20 +807,29 @@ or
 CHANGE ${piNumber || '<PI No.>'} followed by the required correction.`
 }
 
-const parseCustomerConfirmationReply = (text, fallbackPiNumber = '') => {
+const detectCustomerCommand = (text, fallbackPiNumber = '') => {
   const normalized = toText(text)
-  const commandMatch = normalized.match(/^(CONFIRM|CHANGE)\s+([A-Z0-9/-]*\d+)\b([\s\S]*)$/i)
+  const confirmMatch = normalized.match(CONFIRM_CUSTOMER_COMMAND_REGEX)
 
-  if (commandMatch) {
+  if (confirmMatch) {
     return {
-      changeRequest: toText(commandMatch[3]),
-      command: commandMatch[1].toUpperCase(),
+      changeRequest: '',
+      command: 'CONFIRM',
       handled: true,
-      piNumber: commandMatch[2].toUpperCase(),
-      status:
-        commandMatch[1].toUpperCase() === 'CONFIRM'
-          ? CUSTOMER_CONFIRMATION_STATUSES.CONFIRMED
-          : CUSTOMER_CONFIRMATION_STATUSES.CHANGE_REQUESTED,
+      piNumber: confirmMatch[1].toUpperCase(),
+      status: CUSTOMER_CONFIRMATION_STATUSES.CONFIRMED,
+    }
+  }
+
+  const changeMatch = normalized.match(CHANGE_CUSTOMER_COMMAND_REGEX)
+
+  if (changeMatch) {
+    return {
+      changeRequest: toText(changeMatch[2]),
+      command: 'CHANGE',
+      handled: true,
+      piNumber: changeMatch[1].toUpperCase(),
+      status: CUSTOMER_CONFIRMATION_STATUSES.CHANGE_REQUESTED,
     }
   }
 
@@ -638,6 +849,9 @@ const parseCustomerConfirmationReply = (text, fallbackPiNumber = '') => {
   }
 }
 
+const parseCustomerConfirmationReply = (text, fallbackPiNumber = '') =>
+  detectCustomerCommand(text, fallbackPiNumber)
+
 const updateCustomerConfirmation = async (
   pool,
   sourceMessageId,
@@ -652,16 +866,16 @@ const updateCustomerConfirmation = async (
     `
       UPDATE ${INCOMING_MESSAGE_TABLE_NAME}
       SET
-        customer_confirmation_status = $2,
+        customer_confirmation_status = $2::varchar,
         customer_confirmation_at = CURRENT_TIMESTAMP,
-        customer_confirmation_message_id = $3,
+        customer_confirmation_message_id = $3::varchar,
         customer_change_request = CASE
-          WHEN $2 = 'CHANGE_REQUESTED' THEN $4
+          WHEN $2::varchar = 'CHANGE_REQUESTED' THEN $4::text
           ELSE customer_change_request
         END,
-        reply_status = $2,
+        reply_status = $2::varchar,
         updated_at = CURRENT_TIMESTAMP
-      WHERE message_id = $1
+      WHERE message_id = $1::varchar
     `,
     [toText(sourceMessageId), status, toText(confirmationMessageId), changeRequest || null],
   )
@@ -671,7 +885,7 @@ const getSourceMessageByDraftPI = async ({ pi, pool } = {}) =>
   getSourceMessageForPI({
     piNumber: pi?.piNumber,
     pool,
-    sourceMessageId: pi?.poNo,
+    sourceMessageId: '',
   })
 
 const handleCustomerConfirmationReply = async ({
@@ -686,93 +900,188 @@ const handleCustomerConfirmationReply = async ({
   senderPhone = '',
   tableNames = {},
 } = {}) => {
-  const parsed = parseCustomerConfirmationReply(replyText, piNumber)
+  let parsed
 
-  if (!parsed.handled) {
-    return parsed
-  }
+  try {
+    parsed = parseCustomerConfirmationReply(replyText, piNumber)
 
-  const targetPiNumber = parsed.piNumber || toText(piNumber).toUpperCase()
-  const pi = targetPiNumber
-    ? await loadDraftPIForSummary({ piNumber: targetPiNumber, pool, tableNames })
-    : null
-  const errors = []
-  let sourceMessage = null
-  let finalStatus = parsed.status
-
-  if (!targetPiNumber) {
-    errors.push('Draft PI number is required in the reply.')
-    finalStatus = CUSTOMER_CONFIRMATION_STATUSES.INVALID_RESPONSE
-  } else if (!pi) {
-    errors.push(`Draft PI ${targetPiNumber} was not found.`)
-    finalStatus = CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW
-  } else {
-    sourceMessage = await getSourceMessageByDraftPI({ pi, pool })
-
-    if (!sourceMessage) {
-      errors.push(`Source WhatsApp message for Draft PI ${targetPiNumber} was not found.`)
-      finalStatus = CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW
-    } else if (
-      normalizePhoneDigits(sourceMessage.sender_phone) !== normalizePhoneDigits(senderPhone)
-    ) {
-      errors.push('Confirmation sender does not match the Draft PI source sender.')
-      finalStatus = CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW
-    }
-  }
-
-  if (
-    finalStatus === CUSTOMER_CONFIRMATION_STATUSES.CHANGE_REQUESTED &&
-    !toText(parsed.changeRequest)
-  ) {
-    errors.push('Change request details are required after CHANGE PI number.')
-    finalStatus = CUSTOMER_CONFIRMATION_STATUSES.INVALID_RESPONSE
-  }
-
-  const responseMessage = buildConfirmationResponseMessage({
-    piNumber: targetPiNumber,
-    status: finalStatus,
-  })
-  let sendResult = null
-
-  if (!dryRun && sourceMessage && errors.length === 0) {
-    await updateCustomerConfirmation(pool, sourceMessage.message_id, {
-      changeRequest: parsed.changeRequest,
-      confirmationMessageId: messageId,
-      status: finalStatus,
+    logOutgoingPipeline('Handler entered', {
+      command: parsed.command ?? '',
+      currentFunction: 'handleCustomerConfirmationReply',
+      messageId,
+      messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+      piNumber: parsed.piNumber || piNumber,
+      senderPhone,
     })
-  }
 
-  if (sendResponse && !dryRun && finalStatus !== CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW) {
-    const config = getAcknowledgementConfig(env)
-    const allowed = isAllowedTesterNumber(senderPhone, config)
+    if (!parsed.handled) {
+      return parsed
+    }
 
-    if (config.mode === 'development' && !allowed) {
-      sendResult = {
-        errorMessage: 'Sender phone is not in WHATSAPP_ALLOWED_TEST_NUMBERS.',
-        ok: false,
-        status: PI_SUMMARY_STATUSES.TEST_NUMBER_NOT_ALLOWED,
-      }
+    const targetPiNumber = parsed.piNumber || toText(piNumber).toUpperCase()
+    let pi = null
+    const errors = []
+    let sourceMessage = null
+    let finalStatus = parsed.status
+
+    if (!targetPiNumber) {
+      errors.push('Draft PI number is required in the reply.')
+      finalStatus = CUSTOMER_CONFIRMATION_STATUSES.INVALID_RESPONSE
     } else {
-      sendResult = await sendTextMessage({
-        body: responseMessage,
-        contextMessageId: messageId,
-        env,
-        fetchImpl,
-        to: senderPhone,
+      logOutgoingPipeline('Original PI lookup started', {
+        currentFunction: 'handleCustomerConfirmationReply',
+        messageId,
+        messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+        piNumber: targetPiNumber,
+        senderPhone,
+      })
+      pi = await loadDraftPIForSummary({ piNumber: targetPiNumber, pool, tableNames })
+      logOutgoingPipeline(pi ? 'Original PI found' : 'Original PI not found', {
+        currentFunction: 'handleCustomerConfirmationReply',
+        isDraft: Boolean(pi?.isDraft),
+        messageId,
+        messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+        piNumber: targetPiNumber,
+        senderPhone,
       })
     }
-  }
 
-  return {
-    changeRequest: parsed.changeRequest ?? '',
-    errors,
-    handled: true,
-    pi,
-    piNumber: targetPiNumber,
-    responseMessage,
-    sendResult,
-    sourceMessage,
-    status: finalStatus,
+    if (targetPiNumber && !pi) {
+      errors.push(`Draft PI ${targetPiNumber} was not found.`)
+      finalStatus = CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW
+    } else if (pi) {
+      sourceMessage = await getSourceMessageByDraftPI({ pi, pool })
+      logOutgoingPipeline(sourceMessage ? 'Original source row found' : 'Original source row not found', {
+        currentFunction: 'handleCustomerConfirmationReply',
+        messageId,
+        messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+        piNumber: targetPiNumber,
+        sourceMessageId: sourceMessage?.message_id ?? '',
+      })
+
+      if (!sourceMessage) {
+        errors.push(`Source WhatsApp message for Draft PI ${targetPiNumber} was not found.`)
+        finalStatus = CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW
+      } else {
+        const senderMatches =
+          normalizePhoneDigits(sourceMessage.sender_phone) === normalizePhoneDigits(senderPhone)
+        logOutgoingPipeline('Sender comparison', {
+          currentFunction: 'handleCustomerConfirmationReply',
+          messageId,
+          messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+          piNumber: targetPiNumber,
+          senderMatches,
+        })
+
+        if (!senderMatches) {
+          errors.push('Confirmation sender does not match the Draft PI source sender.')
+          finalStatus = CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW
+        } else if (
+          finalStatus === CUSTOMER_CONFIRMATION_STATUSES.CONFIRMED &&
+          sourceMessage.customer_confirmation_status === CUSTOMER_CONFIRMATION_STATUSES.CONFIRMED
+        ) {
+          finalStatus = CUSTOMER_CONFIRMATION_STATUSES.ALREADY_CONFIRMED
+        }
+      }
+    }
+
+    if (
+      finalStatus === CUSTOMER_CONFIRMATION_STATUSES.CHANGE_REQUESTED &&
+      !toText(parsed.changeRequest)
+    ) {
+      errors.push('Change request details are required after CHANGE PI number.')
+      finalStatus = CUSTOMER_CONFIRMATION_STATUSES.INVALID_RESPONSE
+    }
+
+    const responseMessage = buildConfirmationResponseMessage({
+      piNumber: targetPiNumber,
+      status: finalStatus,
+    })
+    let sendResult = null
+
+    if (
+      !dryRun &&
+      sourceMessage &&
+      errors.length === 0 &&
+      finalStatus !== CUSTOMER_CONFIRMATION_STATUSES.ALREADY_CONFIRMED
+    ) {
+      await updateCustomerConfirmation(pool, sourceMessage.message_id, {
+        changeRequest: parsed.changeRequest,
+        confirmationMessageId: messageId,
+        status: finalStatus,
+      })
+      logOutgoingPipeline('Original row update result', {
+        currentFunction: 'handleCustomerConfirmationReply',
+        messageId,
+        messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+        piNumber: targetPiNumber,
+        status: finalStatus,
+      })
+    }
+
+    if (sendResponse && !dryRun && finalStatus !== CUSTOMER_CONFIRMATION_STATUSES.MANUAL_REVIEW) {
+      const config = getAcknowledgementConfig(env)
+      const allowed = isAllowedTesterNumber(senderPhone, config)
+
+      if (config.mode === 'development' && !allowed) {
+        sendResult = {
+          errorMessage: 'Sender phone is not in WHATSAPP_ALLOWED_TEST_NUMBERS.',
+          ok: false,
+          status: PI_SUMMARY_STATUSES.TEST_NUMBER_NOT_ALLOWED,
+        }
+      } else {
+        sendResult = await sendTextMessage({
+          body: responseMessage,
+          contextMessageId: messageId,
+          env,
+          fetchImpl,
+          piNumber: targetPiNumber,
+          pool,
+          purpose:
+            finalStatus === CUSTOMER_CONFIRMATION_STATUSES.CHANGE_REQUESTED
+              ? MESSAGE_PURPOSES.CHANGE_REQUEST_ACK
+              : MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+          sourceMessageRecordId: sourceMessage?.id,
+          sourceWhatsappMessageId: messageId,
+          to: senderPhone,
+        })
+      }
+
+      logOutgoingPipeline('Acknowledgement send result', {
+        currentFunction: 'handleCustomerConfirmationReply',
+        messageId,
+        messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+        metaMessageId: sendResult?.metaMessageId ?? '',
+        piNumber: targetPiNumber,
+        sendLogId: sendResult?.sendLogId ?? null,
+        status: sendResult?.status ?? '',
+      })
+    }
+
+    return {
+      changeRequest: parsed.changeRequest ?? '',
+      command: parsed.command ?? '',
+      errors,
+      handled: true,
+      pi,
+      piNumber: targetPiNumber,
+      responseMessage,
+      sendResult,
+      sourceMessage,
+      status: finalStatus,
+    }
+  } catch (error) {
+    logOutgoingPipeline('Customer confirmation handler failed', {
+      currentFunction: 'handleCustomerConfirmationReply',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      messageId,
+      messagePurpose: MESSAGE_PURPOSES.CUSTOMER_CONFIRMATION_ACK,
+      piNumber: parsed?.piNumber || piNumber,
+      sqlstate: error?.code ?? '',
+      stack: error instanceof Error ? error.stack : '',
+    })
+    throw error
   }
 }
 
@@ -781,6 +1090,7 @@ export {
   PI_SUMMARY_STATUSES,
   buildConfirmationResponseMessage,
   buildPiSummaryMessage,
+  detectCustomerCommand,
   ensurePiSummarySchema,
   formatIndianCurrency,
   handleCustomerConfirmationReply,

@@ -166,6 +166,7 @@ test('expired token is safely classified with mocked Meta response', async () =>
     body: 'Phase 1 token test',
     env: {
       WHATSAPP_ACCESS_TOKEN: 'test-token',
+      WHATSAPP_ALLOWED_TEST_NUMBERS: '917733850017',
       WHATSAPP_GRAPH_API_BASE: 'https://graph.facebook.com/v20.0',
       WHATSAPP_PHONE_NUMBER_ID: '123',
     },

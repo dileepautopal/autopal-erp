@@ -25,6 +25,7 @@
     "test:pi-report-export": "node --test backend/piReportExportService.test.js",
     "test:pi-summary": "node --test backend/piSummaryService.test.js",
     "test:whatsapp-ack": "node --test backend/whatsappAckService.test.js",
+    "test:whatsapp-send": "node --test backend/whatsappSendService.test.js",
     "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
     "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",
     "build": "tsc -b && vite build",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { TextareaField } from '../components/ui/Field'
 import { apiUrl } from '../config/api'
@@ -71,6 +71,71 @@ type IncomingWhatsappMessage = {
   updatedAt?: string
 }
 
+type SendMonitorSummary = {
+  health?: {
+    color?: string
+    lastFailedSend?: string | null
+    lastFailureCategory?: string
+    lastSuccessfulSend?: string | null
+    oldestPendingRetryAt?: string | null
+    pendingRetryCount?: number
+  }
+  summary?: {
+    metaApiFailures?: number
+    networkFailures?: number
+    pending?: number
+    permanentlyFailed?: number
+    retryScheduled?: number
+    retrying?: number
+    sentToday?: number
+    testNumberBlocked?: number
+    tokenExpired?: number
+  }
+}
+
+type SendLog = {
+  attemptNumber: number
+  attemptStatus: string
+  createdAt?: string
+  destinationPhone?: string
+  durationMs?: number | null
+  failureCategory?: string
+  httpStatus?: number | null
+  messageBody?: string
+  messagePurpose?: string
+  metaErrorMessage?: string
+  metaMessageId?: string
+  metaResponse?: unknown
+  networkErrorMessage?: string
+  nextRetryAt?: string | null
+  piNumber?: string
+  requestPayload?: unknown
+  requestStartedAt?: string | null
+  retryable?: boolean
+  sendLogId: number
+  sourceWhatsappMessageId?: string
+}
+
+type SendTimelineEntry = {
+  detail?: unknown
+  status?: string
+  timestamp?: string
+  title?: string
+}
+
+type SendLogFilters = {
+  attemptStatus: string
+  destinationPhone: string
+  endDate: string
+  failureCategory: string
+  messagePurpose: string
+  metaMessageId: string
+  piNumber: string
+  retryable: string
+  sourceMessageId: string
+  startDate: string
+}
+
 type APIErrorBody = {
   detail?: string
   errors?: string[]
@@ -81,8 +146,14 @@ const STATUS_API_URL = apiUrl('/api/whatsapp-pi/status')
 const PARSE_API_URL = apiUrl('/api/whatsapp-pi/parse-text')
 const IMPORT_API_URL = apiUrl('/api/whatsapp-pi/import-text')
 const MESSAGES_API_URL = apiUrl('/api/whatsapp-pi/messages?limit=10')
+const SEND_MONITOR_SUMMARY_API_URL = apiUrl('/api/whatsapp-pi/send-monitor/summary')
+const SEND_MONITOR_LOGS_API_URL = apiUrl('/api/whatsapp-pi/send-monitor/logs')
 const reprocessMessageApiUrl = (messageId: string) =>
   apiUrl(`/api/whatsapp-pi/messages/${encodeURIComponent(messageId)}/reprocess`)
+const sendMonitorActionApiUrl = (sendLogId: number, action: string) =>
+  apiUrl(`/api/whatsapp-pi/send-monitor/${encodeURIComponent(sendLogId)}/${action}`)
+const messageTimelineApiUrl = (messageId: string) =>
+  apiUrl(`/api/whatsapp-pi/messages/${encodeURIComponent(messageId)}/timeline`)
 
 const sampleMessage = [
   'Date: 20/06/2026',
@@ -129,6 +200,34 @@ const formatIncomingMessageTime = (value: string) => {
   }).format(date)
 }
 
+const formatDateTime = (value?: string | null) =>
+  value ? formatIncomingMessageTime(value) || value : '-'
+
+const formatJsonPreview = (value: unknown) => {
+  if (value === null || value === undefined || value === '') {
+    return 'No data'
+  }
+
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const defaultSendLogFilters: SendLogFilters = {
+  attemptStatus: '',
+  destinationPhone: '',
+  endDate: '',
+  failureCategory: '',
+  messagePurpose: '',
+  metaMessageId: '',
+  piNumber: '',
+  retryable: '',
+  sourceMessageId: '',
+  startDate: '',
+}
+
 const getIncomingMessageErrorText = (message: IncomingWhatsappMessage) => {
   if (message.parseErrors && message.parseErrors.length > 0) {
     return message.parseErrors.join(' ')
@@ -161,7 +260,55 @@ export function WhatsAppPIConnect({
     useState<IncomingWhatsappMessage | null>(null)
   const [incomingMessages, setIncomingMessages] = useState<IncomingWhatsappMessage[]>([])
   const [reprocessingMessageId, setReprocessingMessageId] = useState('')
+  const [sendMonitor, setSendMonitor] = useState<SendMonitorSummary | null>(null)
+  const [sendLogs, setSendLogs] = useState<SendLog[]>([])
+  const [sendLogFilters, setSendLogFilters] =
+    useState<SendLogFilters>(defaultSendLogFilters)
+  const [selectedSendLog, setSelectedSendLog] = useState<SendLog | null>(null)
+  const [timelineMessageId, setTimelineMessageId] = useState('')
+  const [timelineEntries, setTimelineEntries] = useState<SendTimelineEntry[]>([])
+  const [isLoadingSendMonitor, setIsLoadingSendMonitor] = useState(false)
+  const [sendMonitorError, setSendMonitorError] = useState('')
+  const [sendActionLogId, setSendActionLogId] = useState<number | null>(null)
   const latestIncomingMessageKeyRef = useRef('')
+
+  const loadSendMonitor = useCallback(async () => {
+    setIsLoadingSendMonitor(true)
+    setSendMonitorError('')
+
+    try {
+      const params = new URLSearchParams()
+      Object.entries(sendLogFilters).forEach(([key, value]) => {
+        if (value) {
+          params.set(key, value)
+        }
+      })
+      params.set('limit', '25')
+
+      const [summaryResponse, logsResponse] = await Promise.all([
+        fetch(SEND_MONITOR_SUMMARY_API_URL),
+        fetch(`${SEND_MONITOR_LOGS_API_URL}?${params.toString()}`),
+      ])
+
+      if (!summaryResponse.ok) {
+        throw new Error(await getApiErrorMessage(summaryResponse))
+      }
+
+      if (!logsResponse.ok) {
+        throw new Error(await getApiErrorMessage(logsResponse))
+      }
+
+      setSendMonitor((await summaryResponse.json()) as SendMonitorSummary)
+      const logsBody = (await logsResponse.json()) as { logs?: SendLog[] }
+      setSendLogs(logsBody.logs ?? [])
+    } catch (error) {
+      setSendMonitorError(
+        error instanceof Error ? error.message : 'Unable to load WhatsApp send monitor',
+      )
+    } finally {
+      setIsLoadingSendMonitor(false)
+    }
+  }, [sendLogFilters])
 
   useEffect(() => {
     const loadStatus = async () => {
@@ -180,6 +327,20 @@ export function WhatsAppPIConnect({
 
     void loadStatus()
   }, [])
+
+  useEffect(() => {
+    const initialLoadId = window.setTimeout(() => {
+      void loadSendMonitor()
+    }, 0)
+    const intervalId = window.setInterval(() => {
+      void loadSendMonitor()
+    }, 10000)
+
+    return () => {
+      window.clearInterval(intervalId)
+      window.clearTimeout(initialLoadId)
+    }
+  }, [loadSendMonitor])
 
   useEffect(() => {
     let isActive = true
@@ -334,6 +495,64 @@ export function WhatsAppPIConnect({
       message.processingStatus || message.parseStatus || '',
     ),
   )
+
+  const loadTimeline = async (messageId: string) => {
+    if (!messageId) {
+      return
+    }
+
+    setTimelineMessageId(messageId)
+
+    try {
+      const response = await fetch(messageTimelineApiUrl(messageId))
+
+      if (!response.ok) {
+        throw new Error(await getApiErrorMessage(response))
+      }
+
+      const body = (await response.json()) as { timeline?: SendTimelineEntry[] }
+      setTimelineEntries(body.timeline ?? [])
+    } catch (error) {
+      setTimelineEntries([
+        {
+          detail: error instanceof Error ? error.message : 'Unable to load timeline',
+          status: 'ERROR',
+          title: 'Timeline unavailable',
+        },
+      ])
+    }
+  }
+
+  const runSendLogAction = async (sendLogId: number, action: string) => {
+    if (action === 'retry-now' && !window.confirm('Retry this WhatsApp send now?')) {
+      return
+    }
+
+    setSendActionLogId(sendLogId)
+    setSendMonitorError('')
+
+    try {
+      const response = await fetch(sendMonitorActionApiUrl(sendLogId, action), {
+        body: JSON.stringify(action === 'retry-now' ? { confirm: true } : {}),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error(await getApiErrorMessage(response))
+      }
+
+      await loadSendMonitor()
+      setNoticeType('success')
+      setNotice('WhatsApp send monitor updated')
+    } catch (error) {
+      setSendMonitorError(
+        error instanceof Error ? error.message : 'Unable to update send log',
+      )
+    } finally {
+      setSendActionLogId(null)
+    }
+  }
 
   const importMessage = async () => {
     setIsImporting(true)
@@ -532,6 +751,321 @@ export function WhatsAppPIConnect({
           </div>
         </section>
       ) : null}
+
+      <section className="panel whatsapp-send-monitor-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Reliability</p>
+            <h2>WhatsApp Send Monitor</h2>
+          </div>
+          <div className="header-actions">
+            <span className={`status-pill health-${sendMonitor?.health?.color || 'GREEN'}`}>
+              Health {sendMonitor?.health?.color || 'GREEN'}
+            </span>
+            <Button
+              disabled={isLoadingSendMonitor}
+              onClick={() => void loadSendMonitor()}
+              variant="secondary"
+            >
+              {isLoadingSendMonitor ? 'Refreshing' : 'Refresh'}
+            </Button>
+          </div>
+        </div>
+
+        {sendMonitorError ? (
+          <div className="login-message">{sendMonitorError}</div>
+        ) : null}
+
+        <div className="summary-strip whatsapp-send-summary-strip">
+          <div>
+            <span>Sent Today</span>
+            <strong>{sendMonitor?.summary?.sentToday ?? 0}</strong>
+          </div>
+          <div>
+            <span>Pending</span>
+            <strong>{sendMonitor?.summary?.pending ?? 0}</strong>
+          </div>
+          <div>
+            <span>Retry Scheduled</span>
+            <strong>{sendMonitor?.summary?.retryScheduled ?? 0}</strong>
+          </div>
+          <div>
+            <span>Retrying</span>
+            <strong>{sendMonitor?.summary?.retrying ?? 0}</strong>
+          </div>
+          <div>
+            <span>Permanent Failed</span>
+            <strong>{sendMonitor?.summary?.permanentlyFailed ?? 0}</strong>
+          </div>
+          <div>
+            <span>Token Expired</span>
+            <strong>{sendMonitor?.summary?.tokenExpired ?? 0}</strong>
+          </div>
+          <div>
+            <span>Test Blocked</span>
+            <strong>{sendMonitor?.summary?.testNumberBlocked ?? 0}</strong>
+          </div>
+          <div>
+            <span>Network Failures</span>
+            <strong>{sendMonitor?.summary?.networkFailures ?? 0}</strong>
+          </div>
+          <div>
+            <span>Meta Failures</span>
+            <strong>{sendMonitor?.summary?.metaApiFailures ?? 0}</strong>
+          </div>
+        </div>
+
+        <div className="whatsapp-send-health-grid">
+          <div>
+            <span>Last successful send</span>
+            <strong>{formatDateTime(sendMonitor?.health?.lastSuccessfulSend)}</strong>
+          </div>
+          <div>
+            <span>Last failed send</span>
+            <strong>{formatDateTime(sendMonitor?.health?.lastFailedSend)}</strong>
+          </div>
+          <div>
+            <span>Last failure</span>
+            <strong>{sendMonitor?.health?.lastFailureCategory || '-'}</strong>
+          </div>
+          <div>
+            <span>Oldest pending retry</span>
+            <strong>{formatDateTime(sendMonitor?.health?.oldestPendingRetryAt)}</strong>
+          </div>
+        </div>
+
+        <div className="whatsapp-send-filter-grid">
+          {[
+            ['startDate', 'Start Date', 'date'],
+            ['endDate', 'End Date', 'date'],
+            ['destinationPhone', 'Destination', 'text'],
+            ['piNumber', 'PI Number', 'text'],
+            ['sourceMessageId', 'Source Message', 'text'],
+            ['metaMessageId', 'Meta Message ID', 'text'],
+          ].map(([key, label, type]) => (
+            <label key={key}>
+              <span>{label}</span>
+              <input
+                onChange={(event) =>
+                  setSendLogFilters((current) => ({
+                    ...current,
+                    [key]: event.target.value,
+                  }))
+                }
+                type={type}
+                value={sendLogFilters[key as keyof SendLogFilters]}
+              />
+            </label>
+          ))}
+          <label>
+            <span>Purpose</span>
+            <select
+              onChange={(event) =>
+                setSendLogFilters((current) => ({
+                  ...current,
+                  messagePurpose: event.target.value,
+                }))
+              }
+              value={sendLogFilters.messagePurpose}
+            >
+              <option value="">All</option>
+              <option value="AUTO_ACKNOWLEDGEMENT">Auto ACK</option>
+              <option value="PI_SUMMARY">PI Summary</option>
+              <option value="CUSTOMER_CONFIRMATION_ACK">Confirmation ACK</option>
+              <option value="CHANGE_REQUEST_ACK">Change ACK</option>
+              <option value="MANUAL_TEST">Manual Test</option>
+            </select>
+          </label>
+          <label>
+            <span>Status</span>
+            <select
+              onChange={(event) =>
+                setSendLogFilters((current) => ({
+                  ...current,
+                  attemptStatus: event.target.value,
+                }))
+              }
+              value={sendLogFilters.attemptStatus}
+            >
+              <option value="">All</option>
+              <option value="SENT">Sent</option>
+              <option value="FAILED">Failed</option>
+              <option value="RETRY_SCHEDULED">Retry Scheduled</option>
+              <option value="RETRYING">Retrying</option>
+              <option value="PERMANENTLY_FAILED">Permanently Failed</option>
+              <option value="CANCELLED">Cancelled</option>
+              <option value="MANUAL_REVIEW">Manual Review</option>
+            </select>
+          </label>
+          <label>
+            <span>Failure</span>
+            <input
+              onChange={(event) =>
+                setSendLogFilters((current) => ({
+                  ...current,
+                  failureCategory: event.target.value,
+                }))
+              }
+              placeholder="NETWORK_TIMEOUT"
+              value={sendLogFilters.failureCategory}
+            />
+          </label>
+          <label>
+            <span>Retryable</span>
+            <select
+              onChange={(event) =>
+                setSendLogFilters((current) => ({
+                  ...current,
+                  retryable: event.target.value,
+                }))
+              }
+              value={sendLogFilters.retryable}
+            >
+              <option value="">All</option>
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </label>
+          <div className="whatsapp-send-filter-actions">
+            <Button onClick={() => void loadSendMonitor()} variant="secondary">
+              Apply
+            </Button>
+            <Button
+              onClick={() => setSendLogFilters(defaultSendLogFilters)}
+              variant="ghost"
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+
+        {sendLogs.length > 0 ? (
+          <div className="responsive-table">
+            <table className="master-table whatsapp-send-log-table">
+              <thead>
+                <tr>
+                  <th>Send Log ID</th>
+                  <th>Purpose</th>
+                  <th>PI Number</th>
+                  <th>Destination</th>
+                  <th>Attempt</th>
+                  <th>Status</th>
+                  <th>Failure Category</th>
+                  <th>HTTP</th>
+                  <th>Meta Message ID</th>
+                  <th>Error</th>
+                  <th>Started At</th>
+                  <th>Duration</th>
+                  <th>Next Retry At</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sendLogs.map((log) => (
+                  <tr key={log.sendLogId}>
+                    <td>{log.sendLogId}</td>
+                    <td>{log.messagePurpose || '-'}</td>
+                    <td>{log.piNumber || '-'}</td>
+                    <td>{log.destinationPhone || '-'}</td>
+                    <td>{log.attemptNumber}</td>
+                    <td>{log.attemptStatus || '-'}</td>
+                    <td>{log.failureCategory || '-'}</td>
+                    <td>{log.httpStatus ?? '-'}</td>
+                    <td>{log.metaMessageId || '-'}</td>
+                    <td>{log.metaErrorMessage || log.networkErrorMessage || '-'}</td>
+                    <td>{formatDateTime(log.requestStartedAt)}</td>
+                    <td>{log.durationMs === null || log.durationMs === undefined ? '-' : `${log.durationMs} ms`}</td>
+                    <td>{formatDateTime(log.nextRetryAt)}</td>
+                    <td>
+                      <div className="whatsapp-send-action-row">
+                        <Button onClick={() => setSelectedSendLog(log)} variant="ghost">
+                          Details
+                        </Button>
+                        <Button
+                          disabled={sendActionLogId === log.sendLogId || log.attemptStatus === 'SENT'}
+                          onClick={() => void runSendLogAction(log.sendLogId, 'retry-now')}
+                          variant="secondary"
+                        >
+                          Retry Now
+                        </Button>
+                        <Button
+                          disabled={sendActionLogId === log.sendLogId || log.attemptStatus !== 'RETRY_SCHEDULED'}
+                          onClick={() => void runSendLogAction(log.sendLogId, 'cancel')}
+                          variant="ghost"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          disabled={sendActionLogId === log.sendLogId || log.attemptStatus === 'SENT'}
+                          onClick={() => void runSendLogAction(log.sendLogId, 'manual-review')}
+                          variant="ghost"
+                        >
+                          Manual Review
+                        </Button>
+                        {log.sourceWhatsappMessageId ? (
+                          <Button
+                            onClick={() => void loadTimeline(log.sourceWhatsappMessageId || '')}
+                            variant="ghost"
+                          >
+                            Source
+                          </Button>
+                        ) : null}
+                        {log.piNumber ? (
+                          <Button onClick={() => onNavigate('pi-preview')} variant="ghost">
+                            Open PI
+                          </Button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state whatsapp-empty-state">
+            <h2>No WhatsApp send logs</h2>
+          </div>
+        )}
+
+        {selectedSendLog ? (
+          <div className="whatsapp-send-detail-grid">
+            <div>
+              <div className="section-heading compact">
+                <h3>Safe Request</h3>
+                <Button onClick={() => setSelectedSendLog(null)} variant="ghost">
+                  Close
+                </Button>
+              </div>
+              <pre>{formatJsonPreview(selectedSendLog.requestPayload)}</pre>
+            </div>
+            <div>
+              <div className="section-heading compact">
+                <h3>Safe Response</h3>
+              </div>
+              <pre>{formatJsonPreview(selectedSendLog.metaResponse)}</pre>
+            </div>
+          </div>
+        ) : null}
+
+        {timelineEntries.length > 0 ? (
+          <div className="whatsapp-send-timeline">
+            <div className="section-heading compact">
+              <h3>Source Message Timeline</h3>
+              <span className="status-pill">{timelineMessageId}</span>
+            </div>
+            <ol>
+              {timelineEntries.map((entry, index) => (
+                <li key={`${entry.title}-${entry.timestamp}-${index}`}>
+                  <strong>{entry.title || entry.status || 'Event'}</strong>
+                  <span>{formatDateTime(entry.timestamp)}</span>
+                  <p>{typeof entry.detail === 'string' ? entry.detail : formatJsonPreview(entry.detail)}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+      </section>
 
       <section className="panel whatsapp-manual-review-panel">
         <div className="section-heading">

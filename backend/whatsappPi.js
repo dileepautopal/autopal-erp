@@ -14,6 +14,7 @@ import {
   validateCommercialPI,
 } from './piCommercialService.js'
 import {
+  detectCustomerCommand,
   ensurePiSummarySchema,
   handleCustomerConfirmationReply,
   sendPiSummaryForMessage,
@@ -23,11 +24,26 @@ import {
   isAcknowledgementTerminalStatus,
   sendAutomaticAcknowledgement,
 } from './whatsappAckService.js'
+import { processDueWhatsAppRetries } from './whatsappSendRetryWorker.js'
+import {
+  cancelScheduledRetry,
+  createManualRetryFromLog,
+  ensureWhatsAppSendLogSchema,
+  getWhatsAppSendLogs,
+  getWhatsAppSendMonitorSummary,
+  getWhatsAppSourceTimeline,
+  markSendForManualReview,
+} from './whatsappSendService.js'
+import {
+  logWhatsAppOutgoingEarlyReturn,
+  logWhatsAppOutgoingTrace,
+} from './whatsappOutgoingTrace.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
 const WHATSAPP_MESSAGE_TABLE_NAME = 'tran_whatsapp_pi_messages'
 const WHATSAPP_MESSAGE_EVENT_TABLE_NAME = 'tran_whatsapp_pi_message_events'
+const CUSTOMER_CONFIRMATION_PROCESSED_STATUS = 'CUSTOMER_CONFIRMATION_PROCESSED'
 const WHATSAPP_WEBHOOK_EVENT_TABLE_NAME = 'tran_whatsapp_webhook_events'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const WHATSAPP_UPLOAD_ROOT = path.resolve(
@@ -1157,6 +1173,8 @@ const logWhatsappWebhook = (event, details = {}) => {
   console.log(
     JSON.stringify({
       event,
+      scope: 'whatsapp-webhook',
+      timestamp: new Date().toISOString(),
       ...details,
     }),
   )
@@ -1183,6 +1201,11 @@ const createWebhookResult = ({
   saved,
   warnings: normalizeJSONList(warnings),
 })
+
+const getCustomerConfirmationProcessingStatus = (confirmationStatus) =>
+  confirmationStatus === 'MANUAL_REVIEW'
+    ? 'CUSTOMER_REPLY_MANUAL_REVIEW'
+    : CUSTOMER_CONFIRMATION_PROCESSED_STATUS
 
 class ManualReviewProcessingError extends Error {
   constructor(message, { parseStatus = 'MANUAL_REVIEW', processingStatus = 'MANUAL_REVIEW' } = {}) {
@@ -1333,6 +1356,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       `)
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
+      await ensureWhatsAppSendLogSchema(pool)
     })()
   }
 
@@ -1618,6 +1642,40 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
       LIMIT 1
     `,
     [toLimitedText(messageId, 160)],
+  )
+
+  return result.rows[0] ? mapIncomingWhatsappMessageRow(result.rows[0]) : null
+}
+
+const getIncomingWhatsappMessageById = async (dependencies, rowId) => {
+  await ensureWhatsappMessageSchema(dependencies.pool)
+  const result = await dependencies.pool.query(
+    `
+      SELECT
+        id,
+        message_id,
+        received_at,
+        sender_name,
+        sender_phone,
+        message_type,
+        source_type,
+        message_text,
+        raw_text,
+        processing_text,
+        caption,
+        parse_status,
+        processing_status,
+        reply_status,
+        draft_pi_no,
+        customer_confirmation_status,
+        customer_confirmation_at,
+        customer_confirmation_message_id,
+        updated_at
+      FROM ${WHATSAPP_MESSAGE_TABLE_NAME}
+      WHERE id = $1::bigint
+      LIMIT 1
+    `,
+    [Number(rowId)],
   )
 
   return result.rows[0] ? mapIncomingWhatsappMessageRow(result.rows[0]) : null
@@ -1979,6 +2037,7 @@ const updateIncomingWhatsappMessageProcessing = async (
     piCreated = false,
     processingText = null,
     processingStatus = null,
+    customerConfirmationStatus = null,
     productCount = null,
     replyStatus = null,
   },
@@ -2009,6 +2068,7 @@ const updateIncomingWhatsappMessageProcessing = async (
         processing_status = COALESCE($18, processing_status),
         reply_status = COALESCE($19, reply_status),
         error_details = COALESCE($20::jsonb, error_details),
+        customer_confirmation_status = COALESCE($21, customer_confirmation_status),
         updated_at = CURRENT_TIMESTAMP
       WHERE message_id = $1
       RETURNING
@@ -2084,10 +2144,19 @@ const updateIncomingWhatsappMessageProcessing = async (
       processingStatus ?? parseStatus,
       replyStatus,
       errorDetails ? JSON.stringify(errorDetails) : null,
+      customerConfirmationStatus,
     ],
   )
 
   if (result.rowCount === 0) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappPi.js',
+      currentFunction: 'updateIncomingWhatsappMessageProcessing',
+      messageId,
+      messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+      piNumber: draftPiNo,
+      reason: 'Incoming WhatsApp message row was not found, so acknowledgement cannot be triggered.',
+    })
     return null
   }
 
@@ -2106,14 +2175,42 @@ const updateIncomingWhatsappMessageProcessing = async (
     processingStatus: processingStatus ?? parseStatus,
   })
 
-  if (isAcknowledgementTerminalStatus(processingStatus ?? parseStatus)) {
+  const resolvedProcessingStatus = processingStatus ?? parseStatus
+
+  logWhatsAppOutgoingTrace('Acknowledgement trigger check', {
+    currentFile: 'backend/whatsappPi.js',
+    currentFunction: 'updateIncomingWhatsappMessageProcessing',
+    destinationPhone: mappedRow.senderPhone,
+    messageId,
+    messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+    piNumber: draftPiNo ?? mappedRow.draftPiNo,
+    processingStatus: resolvedProcessingStatus,
+    senderPhone: mappedRow.senderPhone,
+  })
+
+  if (isAcknowledgementTerminalStatus(resolvedProcessingStatus)) {
     try {
+      logWhatsAppOutgoingTrace('Acknowledgement trigger', {
+        currentFile: 'backend/whatsappPi.js',
+        currentFunction: 'updateIncomingWhatsappMessageProcessing',
+        destinationPhone: mappedRow.senderPhone,
+        messageId,
+        messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+        piNumber: draftPiNo ?? mappedRow.draftPiNo,
+        senderPhone: mappedRow.senderPhone,
+        sharedSenderCalled: false,
+      })
+      logWhatsappWebhook('Acknowledgement requested', {
+        draftPiNo: draftPiNo ?? mappedRow.draftPiNo,
+        messageId,
+        processingStatus: resolvedProcessingStatus,
+      })
       const acknowledgementResult = await sendAutomaticAcknowledgement({
         fetchImpl: dependencies.fetch,
         incomingMessageRecord: mappedRow,
         piNumber: draftPiNo ?? mappedRow.draftPiNo,
         pool: dependencies.pool,
-        processingStatus: processingStatus ?? parseStatus,
+        processingStatus: resolvedProcessingStatus,
       })
       await recordWhatsappMessageEvent(dependencies, {
         details: {
@@ -2128,12 +2225,38 @@ const updateIncomingWhatsappMessageProcessing = async (
       })
       logWhatsappWebhook('whatsapp_acknowledgement_processed', {
         acknowledgementStatus: acknowledgementResult.status,
+        failureCategory: acknowledgementResult.failureCategory ?? '',
         messageId,
+      })
+      logWhatsAppOutgoingTrace('Acknowledgement result received', {
+        acknowledgementStatus: acknowledgementResult.status,
+        currentFile: 'backend/whatsappPi.js',
+        currentFunction: 'updateIncomingWhatsappMessageProcessing',
+        destinationPhone: mappedRow.senderPhone,
+        messageId,
+        messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+        piNumber: draftPiNo ?? mappedRow.draftPiNo,
+        senderPhone: mappedRow.senderPhone,
+        sendLogId: acknowledgementResult.sendLogId,
       })
       if (
         acknowledgementResult.status === 'SENT' &&
-        (processingStatus ?? parseStatus) === 'DRAFT_PI_CREATED'
+        ['DRAFT_PI_CREATED', 'PI_CREATED'].includes(resolvedProcessingStatus)
       ) {
+        logWhatsAppOutgoingTrace('PI summary trigger', {
+          currentFile: 'backend/whatsappPi.js',
+          currentFunction: 'updateIncomingWhatsappMessageProcessing',
+          destinationPhone: mappedRow.senderPhone,
+          messageId,
+          messagePurpose: 'PI_SUMMARY',
+          piNumber: draftPiNo ?? mappedRow.draftPiNo,
+          senderPhone: mappedRow.senderPhone,
+          sharedSenderCalled: false,
+        })
+        logWhatsappWebhook('Starting PI summary', {
+          draftPiNo: draftPiNo ?? mappedRow.draftPiNo,
+          messageId,
+        })
         const summaryResult = await sendPiSummaryForMessage({
           fetchImpl: dependencies.fetch,
           incomingMessageRecord: mappedRow,
@@ -2153,7 +2276,23 @@ const updateIncomingWhatsappMessageProcessing = async (
         })
         logWhatsappWebhook('whatsapp_pi_summary_processed', {
           messageId,
+          metaMessageId: summaryResult.metaMessageId ?? '',
           piSummaryStatus: summaryResult.status,
+        })
+      } else {
+        const reason =
+          acknowledgementResult.status !== 'SENT'
+            ? `PI summary not triggered because acknowledgement status is ${acknowledgementResult.status}.`
+            : `PI summary not triggered because processing status is ${resolvedProcessingStatus}.`
+        logWhatsAppOutgoingEarlyReturn({
+          currentFile: 'backend/whatsappPi.js',
+          currentFunction: 'updateIncomingWhatsappMessageProcessing',
+          destinationPhone: mappedRow.senderPhone,
+          messageId,
+          messagePurpose: 'PI_SUMMARY',
+          piNumber: draftPiNo ?? mappedRow.draftPiNo,
+          reason,
+          senderPhone: mappedRow.senderPhone,
         })
       }
     } catch (error) {
@@ -2170,9 +2309,194 @@ const updateIncomingWhatsappMessageProcessing = async (
         messageId,
       })
     }
+  } else {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappPi.js',
+      currentFunction: 'updateIncomingWhatsappMessageProcessing',
+      destinationPhone: mappedRow.senderPhone,
+      messageId,
+      messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+      piNumber: draftPiNo ?? mappedRow.draftPiNo,
+      reason: 'Processing status is not terminal for acknowledgement.',
+      processingStatus: resolvedProcessingStatus,
+      senderPhone: mappedRow.senderPhone,
+    })
+    logWhatsappWebhook('Acknowledgement skipped', {
+      messageId,
+      reason: 'Processing status is not terminal for acknowledgement.',
+      processingStatus: resolvedProcessingStatus,
+    })
   }
 
   return mappedRow
+}
+
+const getCustomerCommandText = (messageRow, fallbackText = '') =>
+  normalizeText(
+    fallbackText ||
+    messageRow?.processingText ||
+    messageRow?.rawText ||
+    messageRow?.messageText ||
+    messageRow?.caption ||
+    '',
+  )
+
+const processCustomerCommandForIncomingMessage = async (
+  dependencies,
+  {
+    incomingMessage,
+    messageText = '',
+    senderPhone = '',
+  },
+) => {
+  const commandText = getCustomerCommandText(incomingMessage, messageText)
+  const detectedCommand = detectCustomerCommand(commandText)
+
+  if (!detectedCommand.handled) {
+    return {
+      handled: false,
+      status: detectedCommand.status,
+    }
+  }
+
+  logWhatsappWebhook('CUSTOMER COMMAND DETECTED', {
+    command: detectedCommand.command,
+    messageId: incomingMessage.messageId,
+    piNumber: detectedCommand.piNumber,
+    senderPhone: senderPhone || incomingMessage.senderPhone,
+  })
+  logWhatsAppOutgoingTrace('CUSTOMER COMMAND DETECTED', {
+    command: detectedCommand.command,
+    currentFile: 'backend/whatsappPi.js',
+    currentFunction: 'processCustomerCommandForIncomingMessage',
+    destinationPhone: senderPhone || incomingMessage.senderPhone,
+    messageId: incomingMessage.messageId,
+    messagePurpose: 'CUSTOMER_CONFIRMATION_ACK',
+    piNumber: detectedCommand.piNumber,
+    senderPhone: senderPhone || incomingMessage.senderPhone,
+  })
+
+  try {
+    const confirmationResult = await handleCustomerConfirmationReply({
+      dryRun: false,
+      env: dependencies.env ?? process.env,
+      fetchImpl: dependencies.fetch,
+      messageId: incomingMessage.messageId,
+      pool: dependencies.pool,
+      replyText: commandText,
+      sendResponse: true,
+      senderPhone: senderPhone || incomingMessage.senderPhone,
+      tableNames: dependencies.tableNames,
+    })
+    const errors = normalizeJSONList(confirmationResult.errors)
+    const warnings = confirmationResult.sendResult?.ok === false
+      ? [confirmationResult.sendResult.errorMessage || 'Confirmation response was not sent.']
+      : []
+    const processingStatus = getCustomerConfirmationProcessingStatus(confirmationResult.status)
+    const incomingUpdate = await updateIncomingWhatsappMessageProcessing(dependencies, {
+      customerConfirmationStatus: confirmationResult.status,
+      draftPiNo: confirmationResult.piNumber,
+      errorDetails: errors.length > 0 ? { errors } : null,
+      importResult: {
+        command: confirmationResult.command ?? detectedCommand.command,
+        errors,
+        inserted: false,
+        piNumber: confirmationResult.piNumber,
+        responseMessage: confirmationResult.responseMessage,
+        status: confirmationResult.status,
+      },
+      messageId: incomingMessage.messageId,
+      messageText: commandText,
+      parseErrors: errors,
+      parseStatus: 'CONFIRMATION_COMMAND',
+      parseWarnings: warnings,
+      processingStatus,
+      processingText: commandText,
+      replyStatus: confirmationResult.status,
+    })
+
+    logWhatsappWebhook('Incoming row update result', {
+      messageId: incomingMessage.messageId,
+      piNumber: confirmationResult.piNumber,
+      processingStatus,
+      rowFound: Boolean(incomingUpdate),
+      status: confirmationResult.status,
+    })
+    logWhatsAppOutgoingTrace('Incoming row update result', {
+      currentFile: 'backend/whatsappPi.js',
+      currentFunction: 'processCustomerCommandForIncomingMessage',
+      destinationPhone: senderPhone || incomingMessage.senderPhone,
+      messageId: incomingMessage.messageId,
+      messagePurpose: 'CUSTOMER_CONFIRMATION_ACK',
+      piNumber: confirmationResult.piNumber,
+      senderPhone: senderPhone || incomingMessage.senderPhone,
+      status: confirmationResult.status,
+    })
+
+    return {
+      confirmationResult,
+      errors,
+      handled: true,
+      incomingUpdate,
+      parseStatus: 'CONFIRMATION_COMMAND',
+      processingStatus,
+      warnings,
+    }
+  } catch (error) {
+    logWhatsappWebhook('customer_confirmation_handler_failed', {
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      messageId: incomingMessage.messageId,
+      piNumber: detectedCommand.piNumber,
+      sqlstate: error?.code ?? '',
+      stack: error instanceof Error ? error.stack : '',
+    })
+    throw error
+  }
+}
+
+const processExistingCustomerConfirmationRow = async (
+  dependencies,
+  {
+    rowId,
+  } = {},
+) => {
+  const incomingMessage = await getIncomingWhatsappMessageById(dependencies, rowId)
+
+  if (!incomingMessage) {
+    return {
+      errors: [`Incoming WhatsApp row ${rowId} was not found.`],
+      handled: false,
+      status: 'ROW_NOT_FOUND',
+    }
+  }
+
+  const commandText = getCustomerCommandText(incomingMessage)
+  const detectedCommand = detectCustomerCommand(commandText)
+
+  if (!detectedCommand.handled) {
+    return {
+      errors: ['Saved row does not contain a customer confirmation command.'],
+      handled: false,
+      incomingMessage,
+      status: detectedCommand.status,
+    }
+  }
+
+  const commandResult = await processCustomerCommandForIncomingMessage(dependencies, {
+    incomingMessage,
+    messageText: commandText,
+    senderPhone: incomingMessage.senderPhone,
+  })
+  const updatedMessage = await getIncomingWhatsappMessageById(dependencies, rowId)
+
+  return {
+    ...commandResult,
+    command: detectedCommand.command,
+    incomingMessage: updatedMessage,
+    piNumber: commandResult.confirmationResult?.piNumber ?? detectedCommand.piNumber,
+    status: commandResult.confirmationResult?.status ?? commandResult.status,
+  }
 }
 
 const downloadWhatsappMedia = async (mediaId) => {
@@ -2738,44 +3062,17 @@ const processSavedWhatsappMessage = async (
     })
   }
 
-  const confirmationResult = await handleCustomerConfirmationReply({
-    dryRun: false,
-    fetchImpl: dependencies.fetch,
-    messageId: messageSource.messageId,
-    pool: dependencies.pool,
-    replyText: processingText,
-    sendResponse: true,
+  const commandResult = await processCustomerCommandForIncomingMessage(dependencies, {
+    incomingMessage: existingMessage || {
+      messageId: messageSource.messageId,
+      senderPhone: messageSource.senderPhone,
+    },
+    messageText: processingText,
     senderPhone: messageSource.senderPhone,
-    tableNames: dependencies.tableNames,
   })
 
-  if (confirmationResult.handled) {
-    const errors = normalizeJSONList(confirmationResult.errors)
-    const warnings = confirmationResult.sendResult?.ok === false
-      ? [confirmationResult.sendResult.errorMessage || 'Confirmation response was not sent.']
-      : []
-
-    await updateIncomingWhatsappMessageProcessing(dependencies, {
-      errorDetails: errors.length > 0 ? { errors } : null,
-      importResult: {
-        errors,
-        inserted: false,
-        piNumber: confirmationResult.piNumber,
-        responseMessage: confirmationResult.responseMessage,
-        status: confirmationResult.status,
-      },
-      messageId: messageSource.messageId,
-      messageText: processingText,
-      parseErrors: errors,
-      parseStatus: confirmationResult.status,
-      parseWarnings: [...mediaWarnings, ...warnings],
-      processingStatus:
-        confirmationResult.status === 'MANUAL_REVIEW'
-          ? 'CUSTOMER_REPLY_MANUAL_REVIEW'
-          : confirmationResult.status,
-      processingText,
-      replyStatus: confirmationResult.status,
-    })
+  if (commandResult.handled) {
+    const confirmationResult = commandResult.confirmationResult
 
     logWhatsappWebhook('whatsapp_customer_confirmation_reply', {
       messageId: messageSource.messageId,
@@ -2787,9 +3084,9 @@ const processSavedWhatsappMessage = async (
       errors,
       inserted: true,
       messageId: messageSource.messageId,
-      parseStatus: confirmationResult.status,
+      parseStatus: commandResult.parseStatus,
       saved: true,
-      warnings: [...mediaWarnings, ...warnings],
+      warnings: [...mediaWarnings, ...commandResult.warnings],
     })
   }
 
@@ -3057,6 +3354,22 @@ const processSavedWhatsappMessage = async (
       replyStatus: piCreated ? 'WAITING_CONFIRMATION' : 'NOT_SENT',
     })
 
+    if (piCreated) {
+      logWhatsAppOutgoingTrace('Draft PI created', {
+        currentFile: 'backend/whatsappPi.js',
+        currentFunction: 'processSavedWhatsappMessage',
+        destinationPhone: messageSource.senderPhone,
+        messageId: messageSource.messageId,
+        messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+        piNumber: draftPiNo,
+        senderPhone: messageSource.senderPhone,
+      })
+      logWhatsappWebhook('Draft PI created', {
+        draftPiNo,
+        messageId: messageSource.messageId,
+      })
+    }
+
     logWhatsappWebhook(piCreated ? 'whatsapp_draft_pi_created' : 'whatsapp_pi_creation_failed', {
       finalProcessingStatus: piCreated ? 'DRAFT_PI_CREATED' : parseStatus,
       matchedProductRows: importResult.payload?.lineItems?.length ?? 0,
@@ -3158,6 +3471,145 @@ export const createWhatsappPIRouter = (dependencies) => {
     }
   })
 
+  router.get('/send-monitor/summary', async (_request, response, next) => {
+    try {
+      response.json({
+        ok: true,
+        ...(await getWhatsAppSendMonitorSummary({ pool: dependencies.pool })),
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.get('/send-monitor/logs', async (request, response, next) => {
+    try {
+      response.json({
+        ok: true,
+        ...(await getWhatsAppSendLogs({
+          filters: {
+            attemptStatus: request.query.attemptStatus,
+            destinationPhone: request.query.destinationPhone,
+            endDate: request.query.endDate,
+            failureCategory: request.query.failureCategory,
+            messagePurpose: request.query.messagePurpose,
+            metaMessageId: request.query.metaMessageId,
+            piNumber: request.query.piNumber,
+            retryable: request.query.retryable,
+            sourceWhatsappMessageId: request.query.sourceMessageId,
+            startDate: request.query.startDate,
+          },
+          limit: request.query.limit,
+          pool: dependencies.pool,
+        })),
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.post('/send-monitor/:sendLogId/retry-now', async (request, response, next) => {
+    try {
+      if (request.body?.confirm !== true) {
+        response.status(400).json({
+          message: 'Manual retry requires confirm: true.',
+          ok: false,
+        })
+        return
+      }
+
+      const created = await createManualRetryFromLog({
+        pool: dependencies.pool,
+        sendLogId: request.params.sendLogId,
+      })
+
+      if (!created.success) {
+        response.status(created.statusCode ?? 422).json({
+          message: created.message,
+          ok: false,
+        })
+        return
+      }
+
+      const processed = await processDueWhatsAppRetries({
+        fetchImpl: dependencies.fetch,
+        limit: 3,
+        pool: dependencies.pool,
+        tableNames: dependencies.tableNames,
+      })
+
+      response.json({
+        ok: true,
+        processed,
+        retryLogId: created.retryLogId,
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.post('/send-monitor/:sendLogId/cancel', async (request, response, next) => {
+    try {
+      const log = await cancelScheduledRetry({
+        pool: dependencies.pool,
+        sendLogId: request.params.sendLogId,
+      })
+
+      if (!log) {
+        response.status(422).json({
+          message: 'Only RETRY_SCHEDULED sends can be cancelled.',
+          ok: false,
+        })
+        return
+      }
+
+      response.json({
+        log,
+        ok: true,
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.post('/send-monitor/:sendLogId/manual-review', async (request, response, next) => {
+    try {
+      const log = await markSendForManualReview({
+        pool: dependencies.pool,
+        sendLogId: request.params.sendLogId,
+      })
+
+      if (!log) {
+        response.status(422).json({
+          message: 'SENT messages cannot be marked for manual review.',
+          ok: false,
+        })
+        return
+      }
+
+      response.json({
+        log,
+        ok: true,
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.get('/messages/:messageId/timeline', async (request, response, next) => {
+    try {
+      response.json({
+        ok: true,
+        ...(await getWhatsAppSourceTimeline({
+          messageId: request.params.messageId,
+          pool: dependencies.pool,
+        })),
+      })
+    } catch (error) {
+      next(error)
+    }
+  })
+
   router.get('/webhook', async (request, response, next) => {
     const mode = request.query['hub.mode']
     const token = request.query['hub.verify_token']
@@ -3188,6 +3640,16 @@ export const createWhatsappPIRouter = (dependencies) => {
       const messages = collectWhatsappMessages(request.body)
       const results = []
       const queuedProcessing = []
+      logWhatsAppOutgoingTrace('Incoming request', {
+        currentFile: 'backend/whatsappPi.js',
+        currentFunction: 'router.post /webhook',
+        messageCount: messages.length,
+      })
+      logWhatsappWebhook('Incoming request', {
+        messageCount: messages.length,
+        method: request.method,
+        path: request.originalUrl ?? request.path,
+      })
       logWhatsappWebhook('whatsapp_webhook_received', {
         messageCount: messages.length,
       })
@@ -3199,6 +3661,15 @@ export const createWhatsappPIRouter = (dependencies) => {
 
       for (const { contact, message } of messages) {
         const messageSource = getWhatsappMessageSource(contact, message)
+        logWhatsAppOutgoingTrace('Incoming WhatsApp message', {
+          currentFile: 'backend/whatsappPi.js',
+          currentFunction: 'router.post /webhook',
+          destinationPhone: messageSource.senderPhone,
+          messageId: messageSource.messageId,
+          messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+          messageType: message.type,
+          senderPhone: messageSource.senderPhone,
+        })
         let text = getInitialWhatsappMessageText(message)
         const savedMessage = await saveIncomingWhatsappMessage(dependencies, {
           ...messageSource,
@@ -3211,6 +3682,28 @@ export const createWhatsappPIRouter = (dependencies) => {
             messageId: messageSource.messageId,
             parseStatus: savedMessage.row?.parseStatus ?? 'DUPLICATE',
           })
+          const duplicateCommand = detectCustomerCommand(getCustomerCommandText(savedMessage.row, text))
+
+          if (duplicateCommand.handled) {
+            const commandResult = await processCustomerCommandForIncomingMessage(dependencies, {
+              incomingMessage: savedMessage.row,
+              messageText: text,
+              senderPhone: messageSource.senderPhone,
+            })
+            results.push(
+              createWebhookResult({
+                duplicate: true,
+                errors: commandResult.errors,
+                inserted: false,
+                messageId: messageSource.messageId,
+                parseStatus: commandResult.parseStatus,
+                saved: true,
+                warnings: commandResult.warnings,
+              }),
+            )
+            continue
+          }
+
           results.push(
             createWebhookResult({
               duplicate: true,
@@ -3230,6 +3723,27 @@ export const createWhatsappPIRouter = (dependencies) => {
           inserted: true,
           messageId: messageSource.messageId,
         })
+
+        const savedCommand = detectCustomerCommand(getCustomerCommandText(savedMessage.row, text))
+
+        if (savedCommand.handled) {
+          const commandResult = await processCustomerCommandForIncomingMessage(dependencies, {
+            incomingMessage: savedMessage.row,
+            messageText: text,
+            senderPhone: messageSource.senderPhone,
+          })
+          results.push(
+            createWebhookResult({
+              errors: commandResult.errors,
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus: commandResult.parseStatus,
+              saved: true,
+              warnings: commandResult.warnings,
+            }),
+          )
+          continue
+        }
 
         if (process.env.WHATSAPP_WEBHOOK_SYNC_PROCESSING !== 'true') {
           queuedProcessing.push({
@@ -3514,6 +4028,19 @@ export const createWhatsappPIRouter = (dependencies) => {
           })
 
           if (piCreated) {
+            logWhatsAppOutgoingTrace('Draft PI created', {
+              currentFile: 'backend/whatsappPi.js',
+              currentFunction: 'router.post /webhook',
+              destinationPhone: messageSource.senderPhone,
+              messageId: messageSource.messageId,
+              messagePurpose: 'AUTO_ACKNOWLEDGEMENT',
+              piNumber: draftPiNo,
+              senderPhone: messageSource.senderPhone,
+            })
+            logWhatsappWebhook('Draft PI created', {
+              draftPiNo,
+              messageId: messageSource.messageId,
+            })
             logWhatsappWebhook('whatsapp_pi_created', {
               messageId: messageSource.messageId,
               parseStatus,
@@ -3726,9 +4253,11 @@ export {
   buildPIPayloadFromParsedMessage,
   findCustomer,
   findProductForItem,
+  getCustomerConfirmationProcessingStatus,
   getNextPINumber,
   matchCustomerForParsedMessage,
   normalizeProductMatchText,
   normalizeText,
+  processExistingCustomerConfirmationRow,
   understandWhatsappMessage,
 }

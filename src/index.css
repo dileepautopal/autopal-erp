@@ -3038,6 +3038,143 @@ body,
   min-height: 220px;
 }
 
+.whatsapp-send-monitor-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.whatsapp-send-summary-strip {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.whatsapp-send-health-grid,
+.whatsapp-send-filter-grid,
+.whatsapp-send-detail-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.whatsapp-send-health-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.whatsapp-send-health-grid > div {
+  background: #fffdf9;
+  border: 1px solid rgba(181, 18, 27, 0.12);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.whatsapp-send-health-grid span,
+.whatsapp-send-filter-grid span {
+  color: var(--muted);
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 900;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.whatsapp-send-health-grid strong {
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.whatsapp-send-filter-grid {
+  align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.whatsapp-send-filter-grid input,
+.whatsapp-send-filter-grid select {
+  background: #fff;
+  border: 1px solid rgba(181, 18, 27, 0.2);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  min-height: 40px;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.whatsapp-send-filter-actions,
+.whatsapp-send-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.whatsapp-send-log-table {
+  min-width: 1320px;
+}
+
+.whatsapp-send-log-table td {
+  vertical-align: top;
+}
+
+.whatsapp-send-detail-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.whatsapp-send-detail-grid > div,
+.whatsapp-send-timeline {
+  background: #fffdf9;
+  border: 1px solid rgba(181, 18, 27, 0.12);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.whatsapp-send-detail-grid pre,
+.whatsapp-send-timeline p {
+  background: #fff;
+  border: 1px solid rgba(181, 18, 27, 0.1);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.whatsapp-send-timeline ol {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.whatsapp-send-timeline li {
+  border-left: 3px solid var(--autopal-red);
+  padding-left: 12px;
+}
+
+.whatsapp-send-timeline li span {
+  color: var(--muted);
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 800;
+  margin: 3px 0 8px;
+}
+
+.health-GREEN {
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.health-YELLOW {
+  background: #fff7e6;
+  color: #9a5b00;
+}
+
+.health-RED {
+  background: var(--autopal-red-soft);
+  color: var(--autopal-red);
+}
+
 .ai-assistant-page {
   max-width: 1440px;
 }
@@ -3762,6 +3899,11 @@ body,
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ai-console-field-action {
+  align-items: end;
+  display: flex;
 }
 
 .ai-console-help {

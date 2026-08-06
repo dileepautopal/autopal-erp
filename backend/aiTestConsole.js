@@ -14,6 +14,7 @@ import {
   normalizeProductMatchText,
   normalizeText,
   parseWhatsappPIItemLine,
+  processExistingCustomerConfirmationRow,
   understandWhatsappMessage,
 } from './whatsappPi.js'
 import {
@@ -1860,6 +1861,53 @@ export const createAITestConsoleRouter = (dependencies) => {
           }
         },
         testType: 'customer-confirmation',
+      })
+
+      response.json(result)
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.post('/customer-confirmation/process-existing-row', async (request, response, next) => {
+    try {
+      const result = await runConsoleTest(dependencies, request, {
+        databaseChanged: true,
+        execute: async () => {
+          const rowId = toText(request.body.rowId)
+          const errors = []
+
+          if (!rowId || !/^\d+$/.test(rowId)) {
+            errors.push('Incoming row ID is required.')
+          }
+
+          const processed = errors.length === 0
+            ? await processExistingCustomerConfirmationRow(dependencies, { rowId })
+            : {
+                errors,
+                handled: false,
+                status: 'INVALID_INPUT',
+              }
+          const sendResult = processed.confirmationResult?.sendResult ?? null
+
+          return {
+            command: processed.command ?? '',
+            databaseChanged: errors.length === 0 && Boolean(processed.handled),
+            errors: [...errors, ...normalizeJSONList(processed.errors)],
+            finalStatus: processed.status ?? 'FAILED',
+            handled: Boolean(processed.handled),
+            incomingMessage: processed.incomingMessage ?? null,
+            metaMessageId: sendResult?.metaMessageId ?? '',
+            piNumber: processed.piNumber ?? '',
+            processingStatus: processed.processingStatus ?? '',
+            sendLogId: sendResult?.sendLogId ?? null,
+            sendResult,
+            sourceMessage: processed.confirmationResult?.sourceMessage ?? null,
+            warnings: normalizeJSONList(processed.warnings),
+            whatsappMessageSent: sendResult?.ok === true,
+          }
+        },
+        testType: 'customer-confirmation-process-existing-row',
       })
 
       response.json(result)

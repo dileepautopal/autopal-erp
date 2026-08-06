@@ -293,6 +293,9 @@ export function AICommunicationTestConsole({
     replyText: 'CONFIRM ',
     senderPhone: '917733850017',
   })
+  const [existingConfirmationInput, setExistingConfirmationInput] = useState({
+    rowId: '100',
+  })
   const [ackInput, setAckInput] = useState({
     action: 'preview',
     confirmSend: false,
@@ -411,6 +414,14 @@ export function AICommunicationTestConsole({
 
   const runCustomerConfirmation = async () => {
     await runRequest('Customer Confirmation Test', '/customer-confirmation', confirmationInput)
+  }
+
+  const runExistingConfirmationRow = async () => {
+    await runRequest(
+      'Process Existing Confirmation Row',
+      '/customer-confirmation/process-existing-row',
+      existingConfirmationInput,
+    )
   }
 
   const runWhatsappAcknowledgement = async () => {
@@ -778,6 +789,20 @@ export function AICommunicationTestConsole({
             }
             value={confirmationInput.replyText}
           />
+          <div className="ai-console-grid">
+            <InputField
+              label="Existing incoming row ID"
+              onChange={(event) =>
+                setExistingConfirmationInput({ rowId: event.target.value })
+              }
+              value={existingConfirmationInput.rowId}
+            />
+            <div className="ai-console-field-action">
+              <Button disabled={isRunning} onClick={() => void runExistingConfirmationRow()} variant="secondary">
+                Process Existing Confirmation Row
+              </Button>
+            </div>
+          </div>
         </div>
       )
     }

@@ -1,3 +1,15 @@
+import {
+  MESSAGE_PURPOSES,
+  SEND_ATTEMPT_STATUSES,
+  SEND_FAILURE_CATEGORIES,
+  ensureWhatsAppSendLogSchema,
+  sendLoggedWhatsAppTextMessage,
+} from './whatsappSendService.js'
+import {
+  logWhatsAppOutgoingEarlyReturn,
+  logWhatsAppOutgoingTrace,
+} from './whatsappOutgoingTrace.js'
+
 const INCOMING_MESSAGE_TABLE_NAME = 'tran_whatsapp_pi_messages'
 const OUTGOING_MESSAGE_TABLE_NAME = 'tran_whatsapp_outgoing_messages'
 const ACK_PURPOSE = 'AUTO_ACKNOWLEDGEMENT'
@@ -6,8 +18,10 @@ const ACK_STATUSES = {
   DISABLED: 'DISABLED',
   DUPLICATE_SKIPPED: 'DUPLICATE_SKIPPED',
   FAILED: 'FAILED',
+  PERMANENTLY_FAILED: 'PERMANENTLY_FAILED',
   NOT_REQUIRED: 'NOT_REQUIRED',
   PENDING: 'PENDING',
+  RETRY_SCHEDULED: 'RETRY_SCHEDULED',
   SENDING: 'SENDING',
   SENT: 'SENT',
   TEMPLATE_REQUIRED: 'TEMPLATE_REQUIRED',
@@ -51,6 +65,15 @@ const sleep = (durationMs) =>
     setTimeout(resolve, Math.max(Number(durationMs) || 0, 0))
   })
 
+const logOutgoingPipeline = (event, details = {}) => {
+  logWhatsAppOutgoingTrace(event, {
+    currentFile: 'backend/whatsappAckService.js',
+    currentFunction: details.currentFunction ?? 'whatsappAckService',
+    messagePurpose: details.messagePurpose ?? ACK_PURPOSE,
+    ...details,
+  })
+}
+
 const parseBooleanEnv = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === '') {
     return defaultValue
@@ -58,6 +81,32 @@ const parseBooleanEnv = (value, defaultValue = false) => {
 
   return ['1', 'true', 'yes', 'y'].includes(toText(value).toLowerCase())
 }
+
+const normalizeNullableText = (value) => {
+  if (value === undefined || value === null) {
+    return null
+  }
+
+  return String(value)
+}
+
+const normalizeNullableInteger = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  const number = Number(value)
+
+  return Number.isFinite(number) ? Math.trunc(number) : null
+}
+
+const getSqlParameterDiagnostics = (parameters) =>
+  parameters.map(({ index, name, value }) => ({
+    index,
+    isNull: value === null,
+    jsType: value === null ? 'null' : typeof value,
+    name,
+  }))
 
 const getAllowedTesterNumbers = (env = process.env) =>
   toText(env.WHATSAPP_ALLOWED_TEST_NUMBERS)
@@ -146,200 +195,86 @@ AUTOPAL ERP
 Autolite (India) Limited`
 }
 
-const sanitizeMetaResponse = (value) => {
-  if (!value || typeof value !== 'object') {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(sanitizeMetaResponse)
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, nestedValue]) => [
-      key,
-      /token|secret|authorization/i.test(key)
-        ? '[REDACTED]'
-        : sanitizeMetaResponse(nestedValue),
-    ]),
-  )
-}
-
-const extractMetaMessageId = (payload) =>
-  toText(payload?.messages?.[0]?.id ?? payload?.message_id ?? '')
-
-const getMetaError = (payload = {}) => {
-  const error = payload?.error ?? {}
-
-  return {
-    code: toText(error.code),
-    message: toText(error.message || payload.message),
-    subcode: toText(error.error_subcode ?? error.subcode),
-    type: toText(error.type),
-  }
-}
-
-const classifyMetaSendFailure = ({ error, httpStatus = 0 }) => {
-  if (error.code === '190' && error.subcode === '463') {
-    return {
-      retryable: false,
-      status: ACK_STATUSES.TOKEN_EXPIRED,
-    }
-  }
-
-  if (error.code === '190') {
-    return {
-      retryable: false,
-      status: ACK_STATUSES.TOKEN_EXPIRED,
-    }
-  }
-
-  if (error.code === '131047') {
-    return {
-      retryable: false,
-      status: ACK_STATUSES.TEMPLATE_REQUIRED,
-    }
-  }
-
-  return {
-    retryable: httpStatus >= 500 || httpStatus === 0,
-    status: ACK_STATUSES.FAILED,
-  }
-}
-
-const readResponsePayload = async (response) => {
-  const text = await response.text()
-
-  if (!text) {
-    return {}
-  }
-
-  try {
-    return JSON.parse(text)
-  } catch {
-    return { message: text }
-  }
-}
-
 const sendTextMessage = async ({
   body,
   contextMessageId = '',
   env = process.env,
   fetchImpl = globalThis.fetch,
+  pool = null,
+  purpose = MESSAGE_PURPOSES.MANUAL_TEST,
+  sourceMessageRecordId = null,
+  sourceWhatsappMessageId = '',
+  piNumber = '',
+  attemptNumber = 1,
+  existingSendLogId = null,
   timeoutMs = 15000,
   to,
 }) => {
-  const config = getAcknowledgementConfig(env)
-  const recipientPhone = normalizePhoneDigits(to)
+  logOutgoingPipeline('sendTextMessage wrapper entered', {
+    currentFunction: 'sendTextMessage',
+    destinationPhone: to,
+    messageId: sourceWhatsappMessageId || contextMessageId,
+    messagePurpose: purpose,
+    piNumber,
+    sharedSenderCalled: true,
+  })
+  const result = await sendLoggedWhatsAppTextMessage({
+    attemptNumber,
+    body,
+    contextMessageId,
+    existingSendLogId,
+    fetchImpl,
+    piNumber,
+    pool,
+    purpose,
+    sourceMessageRecordId,
+    sourceWhatsappMessageId,
+    timeoutMs,
+    to,
+    env,
+  })
+  logOutgoingPipeline('sendTextMessage wrapper returned', {
+    currentFunction: 'sendTextMessage',
+    destinationPhone: to,
+    messageId: sourceWhatsappMessageId || contextMessageId,
+    messagePurpose: purpose,
+    metaApiReturned: Boolean(result.httpStatus || result.metaMessageId),
+    piNumber,
+    sendLogId: result.sendLogId,
+    sharedSenderCalled: true,
+    status: result.status,
+  })
+  const legacyStatus =
+    result.status === SEND_ATTEMPT_STATUSES.PERMANENTLY_FAILED &&
+    [
+      SEND_FAILURE_CATEGORIES.SESSION_WINDOW_CLOSED,
+      SEND_FAILURE_CATEGORIES.TOKEN_EXPIRED,
+      SEND_FAILURE_CATEGORIES.TEST_NUMBER_NOT_ALLOWED,
+    ].includes(result.failureCategory)
+      ? result.failureCategory === SEND_FAILURE_CATEGORIES.SESSION_WINDOW_CLOSED
+        ? ACK_STATUSES.TEMPLATE_REQUIRED
+        : result.failureCategory
+      : result.status
 
-  if (!fetchImpl) {
-    return {
-      errorCode: 'FETCH_UNAVAILABLE',
-      errorMessage: 'Fetch API is not available.',
-      ok: false,
-      retryable: false,
-      status: ACK_STATUSES.FAILED,
-    }
-  }
-
-  if (!config.accessToken) {
-    return {
-      errorCode: 'WHATSAPP_ACCESS_TOKEN_MISSING',
-      errorMessage: 'WHATSAPP_ACCESS_TOKEN is not configured.',
-      ok: false,
-      retryable: false,
-      status: ACK_STATUSES.FAILED,
-    }
-  }
-
-  if (!config.phoneNumberId) {
-    return {
-      errorCode: 'WHATSAPP_PHONE_NUMBER_ID_MISSING',
-      errorMessage: 'WHATSAPP_PHONE_NUMBER_ID is not configured.',
-      ok: false,
-      retryable: false,
-      status: ACK_STATUSES.FAILED,
-    }
-  }
-
-  if (!recipientPhone) {
-    return {
-      errorCode: 'MISSING_RECIPIENT',
-      errorMessage: 'Recipient phone number is required.',
-      ok: false,
-      retryable: false,
-      status: ACK_STATUSES.FAILED,
-    }
-  }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    text: {
-      body,
-      preview_url: false,
-    },
-    to: recipientPhone,
-    type: 'text',
-  }
-
-  if (contextMessageId) {
-    payload.context = {
-      message_id: contextMessageId,
-    }
-  }
-
-  try {
-    const response = await fetchImpl(
-      `${config.graphApiBase.replace(/\/+$/, '')}/${encodeURIComponent(config.phoneNumberId)}/messages`,
-      {
-        body: JSON.stringify(payload),
-        headers: {
-          Authorization: `Bearer ${config.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        method: 'POST',
-        signal: controller.signal,
-      },
-    )
-    const responsePayload = await readResponsePayload(response)
-
-    if (response.ok) {
-      return {
-        metaMessageId: extractMetaMessageId(responsePayload),
-        metaResponse: sanitizeMetaResponse(responsePayload),
-        ok: true,
-        retryable: false,
-        status: ACK_STATUSES.SENT,
-      }
-    }
-
-    const error = getMetaError(responsePayload)
-    const failure = classifyMetaSendFailure({
-      error,
-      httpStatus: response.status,
-    })
-
-    return {
-      errorCode: error.code || String(response.status),
-      errorMessage: error.message || `Meta send failed with HTTP ${response.status}.`,
-      metaResponse: sanitizeMetaResponse(responsePayload),
-      ok: false,
-      retryable: failure.retryable,
-      status: failure.status,
-    }
-  } catch (error) {
-    return {
-      errorCode: error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR',
-      errorMessage: error instanceof Error ? error.message : 'Meta send failed.',
-      ok: false,
-      retryable: true,
-      status: ACK_STATUSES.FAILED,
-    }
-  } finally {
-    clearTimeout(timeout)
+  return {
+    attemptNumber: result.attemptNumber,
+    attempts: result.attemptNumber,
+    durationMs: result.durationMs,
+    errorCode: result.errorCode,
+    errorMessage: result.errorMessage,
+    failureCategory: result.failureCategory,
+    httpStatus: result.httpStatus,
+    messagePurpose: result.messagePurpose || purpose,
+    metaMessageId: result.metaMessageId,
+    metaResponse: result.metaResponse,
+    networkError: result.networkError,
+    nextRetryAt: result.nextRetryAt,
+    ok: result.ok,
+    retryScheduled: result.retryScheduled,
+    retryable: result.retryable,
+    scheduledSendLogId: result.scheduledSendLogId,
+    sendLogId: result.sendLogId,
+    status: legacyStatus,
   }
 }
 
@@ -355,7 +290,9 @@ const ensureWhatsAppAcknowledgementSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS acknowledgement_sent_at timestamptz,
           ADD COLUMN IF NOT EXISTS acknowledgement_whatsapp_message_id varchar(160),
           ADD COLUMN IF NOT EXISTS acknowledgement_error text,
-          ADD COLUMN IF NOT EXISTS acknowledgement_attempts integer NOT NULL DEFAULT 0
+          ADD COLUMN IF NOT EXISTS acknowledgement_attempts integer NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS pi_summary_status varchar(40) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS pi_summary_error text
       `)
       await pool.query(`
         CREATE TABLE IF NOT EXISTS ${OUTGOING_MESSAGE_TABLE_NAME} (
@@ -386,6 +323,7 @@ const ensureWhatsAppAcknowledgementSchema = async (pool) => {
         CREATE INDEX IF NOT EXISTS idx_tran_whatsapp_outgoing_created_at
         ON ${OUTGOING_MESSAGE_TABLE_NAME} (created_at DESC, outgoing_id DESC)
       `)
+      await ensureWhatsAppSendLogSchema(pool)
     })()
   }
 
@@ -410,30 +348,119 @@ const updateIncomingAcknowledgement = async (
   },
 ) => {
   await ensureWhatsAppAcknowledgementSchema(pool)
-  await pool.query(
-    `
-      UPDATE ${INCOMING_MESSAGE_TABLE_NAME}
-      SET
-        acknowledgement_status = $2,
-        acknowledgement_message = COALESCE($3, acknowledgement_message),
-        acknowledgement_sent_at = COALESCE($4::timestamptz, acknowledgement_sent_at),
-        acknowledgement_whatsapp_message_id = COALESCE($5, acknowledgement_whatsapp_message_id),
-        acknowledgement_error = $6,
-        acknowledgement_attempts = COALESCE($7::integer, acknowledgement_attempts),
-        reply_status = $2,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE message_id = $1
-    `,
-    [
-      toText(messageId),
-      status,
-      message,
-      sentAt,
-      metaMessageId,
-      errorMessage,
-      attempts,
-    ],
-  )
+  const messageIdParam = toText(messageId) || null
+  const statusParam = toText(status) || ACK_STATUSES.FAILED
+  const messageParam = normalizeNullableText(message)
+  const sentAtParam = sentAt ?? null
+  const metaMessageIdParam = normalizeNullableText(metaMessageId)
+  const errorMessageParam = normalizeNullableText(errorMessage)
+  const attemptsParam = normalizeNullableInteger(attempts)
+  const replyStatusParam = statusParam
+  const shouldBlockSummary = [
+    ACK_STATUSES.PERMANENTLY_FAILED,
+    ACK_STATUSES.TEST_NUMBER_NOT_ALLOWED,
+    ACK_STATUSES.TOKEN_EXPIRED,
+    SEND_FAILURE_CATEGORIES.CONFIGURATION_ERROR,
+    SEND_FAILURE_CATEGORIES.INVALID_RECIPIENT,
+    SEND_FAILURE_CATEGORIES.PERMISSION_ERROR,
+  ].includes(statusParam)
+  const queryParameters = [
+    messageIdParam,
+    statusParam,
+    messageParam,
+    sentAtParam,
+    metaMessageIdParam,
+    errorMessageParam,
+    attemptsParam,
+    replyStatusParam,
+    shouldBlockSummary,
+  ]
+  const parameterDiagnostics = getSqlParameterDiagnostics([
+    { index: 1, name: 'messageId', value: messageIdParam },
+    { index: 2, name: 'status', value: statusParam },
+    { index: 3, name: 'message', value: messageParam },
+    { index: 4, name: 'sentAt', value: sentAtParam },
+    { index: 5, name: 'metaMessageId', value: metaMessageIdParam },
+    { index: 6, name: 'errorMessage', value: errorMessageParam },
+    { index: 7, name: 'attempts', value: attemptsParam },
+    { index: 8, name: 'replyStatus', value: replyStatusParam },
+    { index: 9, name: 'shouldBlockSummary', value: shouldBlockSummary },
+  ])
+
+  logOutgoingPipeline('Updating source status to acknowledgement state', {
+    acknowledgementStatusUpdated: false,
+    currentFunction: 'updateIncomingAcknowledgement',
+    messagePurpose: ACK_PURPOSE,
+    messageId: messageIdParam,
+    parameterDiagnostics,
+    status: statusParam,
+  })
+
+  try {
+    const result = await pool.query(
+      `
+        UPDATE ${INCOMING_MESSAGE_TABLE_NAME}
+        SET
+          acknowledgement_status = $2::varchar,
+          acknowledgement_message = COALESCE($3::text, acknowledgement_message),
+          acknowledgement_sent_at = COALESCE($4::timestamptz, acknowledgement_sent_at),
+          acknowledgement_whatsapp_message_id =
+            COALESCE($5::varchar, acknowledgement_whatsapp_message_id),
+          acknowledgement_error = $6::text,
+          acknowledgement_attempts = COALESCE($7::integer, acknowledgement_attempts),
+          reply_status = COALESCE($8::varchar, reply_status),
+          pi_summary_status = CASE
+            WHEN $2::varchar = 'RETRY_SCHEDULED'
+              AND COALESCE(draft_pi_no, '') <> ''
+              AND COALESCE(pi_summary_status, 'PENDING') NOT IN ('SENT', 'DISABLED')
+              THEN 'WAITING_FOR_ACKNOWLEDGEMENT'
+            WHEN $9::boolean = TRUE
+              AND COALESCE(draft_pi_no, '') <> ''
+              AND COALESCE(pi_summary_status, 'PENDING') NOT IN ('SENT', 'DISABLED')
+              THEN 'BLOCKED_BY_ACKNOWLEDGEMENT'
+            ELSE pi_summary_status
+          END,
+          pi_summary_error = CASE
+            WHEN $9::boolean = TRUE
+              AND COALESCE(draft_pi_no, '') <> ''
+              AND COALESCE(pi_summary_status, 'PENDING') NOT IN ('SENT', 'DISABLED')
+              THEN $6::text
+            ELSE pi_summary_error
+          END,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE message_id = $1::varchar
+        RETURNING
+          message_id,
+          acknowledgement_status,
+          reply_status,
+          pi_summary_status
+      `,
+      queryParameters,
+    )
+
+    logOutgoingPipeline('Source status update succeeded', {
+      acknowledgementStatusUpdated: true,
+      currentFunction: 'updateIncomingAcknowledgement',
+      messagePurpose: ACK_PURPOSE,
+      messageId: messageIdParam,
+      rowCount: result.rowCount ?? result.rows?.length ?? 0,
+      status: statusParam,
+    })
+
+    return result.rows?.[0] ?? null
+  } catch (error) {
+    logOutgoingPipeline('Source status update failed', {
+      acknowledgementStatusUpdated: false,
+      currentFunction: 'updateIncomingAcknowledgement',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      messagePurpose: ACK_PURPOSE,
+      messageId: messageIdParam,
+      queryOperation: 'update acknowledgement source record',
+      sqlstate: error?.code ?? '',
+      status: statusParam,
+    })
+    throw error
+  }
 }
 
 const getExistingAcknowledgementState = async (pool, messageId) => {
@@ -637,6 +664,16 @@ const validateAcknowledgementPreconditions = ({
   ).toLowerCase()
 
   if (!isAcknowledgementTerminalStatus(processingStatus)) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'validateAcknowledgementPreconditions',
+      destinationPhone: senderPhone,
+      messageId: incomingMessageRecord?.messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: incomingMessageRecord?.draftPiNo,
+      reason: 'Acknowledgement is not required for non-terminal processing status.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Acknowledgement is not required for non-terminal processing status.',
       status: ACK_STATUSES.NOT_REQUIRED,
@@ -644,6 +681,16 @@ const validateAcknowledgementPreconditions = ({
   }
 
   if (!config.autoAckEnabled) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'validateAcknowledgementPreconditions',
+      destinationPhone: senderPhone,
+      messageId: incomingMessageRecord?.messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: incomingMessageRecord?.draftPiNo,
+      reason: 'Automatic acknowledgement is disabled.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Automatic acknowledgement is disabled.',
       status: ACK_STATUSES.DISABLED,
@@ -651,6 +698,15 @@ const validateAcknowledgementPreconditions = ({
   }
 
   if (!senderPhone) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'validateAcknowledgementPreconditions',
+      messageId: incomingMessageRecord?.messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: incomingMessageRecord?.draftPiNo,
+      reason: 'Sender phone number is missing.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Sender phone number is missing.',
       status: ACK_STATUSES.FAILED,
@@ -658,6 +714,17 @@ const validateAcknowledgementPreconditions = ({
   }
 
   if (!SUPPORTED_INCOMING_SOURCE_TYPES.has(sourceType)) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'validateAcknowledgementPreconditions',
+      destinationPhone: senderPhone,
+      messageId: incomingMessageRecord?.messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: incomingMessageRecord?.draftPiNo,
+      reason: 'Acknowledgement is not required for this WhatsApp event type.',
+      senderPhone,
+      sourceType,
+    })
     return {
       errorMessage: 'Acknowledgement is not required for this WhatsApp event type.',
       status: ACK_STATUSES.NOT_REQUIRED,
@@ -665,59 +732,25 @@ const validateAcknowledgementPreconditions = ({
   }
 
   if (config.businessPhoneNumber && senderPhone === config.businessPhoneNumber) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'validateAcknowledgementPreconditions',
+      destinationPhone: senderPhone,
+      messageId: incomingMessageRecord?.messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: incomingMessageRecord?.draftPiNo,
+      reason: 'Acknowledgement is not sent to the business/test number itself.',
+      senderPhone,
+    })
     return {
       errorMessage: 'Acknowledgement is not sent to the business/test number itself.',
       status: ACK_STATUSES.NOT_REQUIRED,
     }
   }
 
-  if (config.mode === 'development' && !isAllowedTesterNumber(senderPhone, config)) {
-    return {
-      errorMessage: 'Sender phone is not in WHATSAPP_ALLOWED_TEST_NUMBERS.',
-      status: ACK_STATUSES.TEST_NUMBER_NOT_ALLOWED,
-    }
-  }
-
   return {
     errorMessage: '',
     status: '',
-  }
-}
-
-const sendWithRetry = async ({
-  body,
-  contextMessageId,
-  env,
-  fetchImpl,
-  maxRetries = 2,
-  to,
-}) => {
-  let attempts = 0
-  let lastResult = null
-
-  while (attempts <= maxRetries) {
-    attempts += 1
-    lastResult = await sendTextMessage({
-      body,
-      contextMessageId,
-      env,
-      fetchImpl,
-      to,
-    })
-
-    if (lastResult.ok || !lastResult.retryable || attempts > maxRetries) {
-      return {
-        attempts,
-        ...lastResult,
-      }
-    }
-
-    await sleep(250 * 2 ** (attempts - 1))
-  }
-
-  return {
-    attempts,
-    ...lastResult,
   }
 }
 
@@ -746,7 +779,24 @@ const sendAutomaticAcknowledgement = async ({
     processingStatus: resolvedProcessingStatus,
   })
 
+  logOutgoingPipeline('Acknowledgement function entered', {
+    currentFunction: 'sendAutomaticAcknowledgement',
+    destinationPhone: incomingMessageRecord?.senderPhone,
+    messageId,
+    piNumber: resolvedPiNumber,
+    senderPhone: incomingMessageRecord?.senderPhone,
+  })
+
   if (!messageId) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'sendAutomaticAcknowledgement',
+      destinationPhone: incomingMessageRecord?.senderPhone,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: resolvedPiNumber,
+      reason: 'Incoming WhatsApp message ID is required.',
+      senderPhone: incomingMessageRecord?.senderPhone,
+    })
     return {
       errorMessage: 'Incoming WhatsApp message ID is required.',
       messageBody,
@@ -762,6 +812,17 @@ const sendAutomaticAcknowledgement = async ({
   })
 
   if (precondition.status) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'sendAutomaticAcknowledgement',
+      destinationPhone: incomingMessageRecord?.senderPhone,
+      messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: resolvedPiNumber,
+      reason: precondition.errorMessage,
+      senderPhone: incomingMessageRecord?.senderPhone,
+      status: precondition.status,
+    })
     await updateIncomingAcknowledgement(pool, messageId, {
       errorMessage: precondition.errorMessage,
       message: messageBody,
@@ -784,6 +845,17 @@ const sendAutomaticAcknowledgement = async ({
     existing.outgoing?.send_status === ACK_STATUSES.SENT ||
     existing.outgoing?.meta_message_id
   ) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'sendAutomaticAcknowledgement',
+      destinationPhone: incomingMessageRecord?.senderPhone,
+      messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: resolvedPiNumber,
+      reason: 'Acknowledgement was already sent for this incoming message.',
+      senderPhone: incomingMessageRecord?.senderPhone,
+      status: ACK_STATUSES.DUPLICATE_SKIPPED,
+    })
     return {
       errorMessage: 'Acknowledgement was already sent for this incoming message.',
       messageBody,
@@ -802,6 +874,18 @@ const sendAutomaticAcknowledgement = async ({
     existing.outgoing.send_status &&
     existing.outgoing.send_status !== ACK_STATUSES.FAILED
   ) {
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'sendAutomaticAcknowledgement',
+      destinationPhone: incomingMessageRecord?.senderPhone,
+      existingStatus: existing.outgoing.send_status,
+      messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: resolvedPiNumber,
+      reason: 'Acknowledgement send is already in progress or not retryable.',
+      senderPhone: incomingMessageRecord?.senderPhone,
+      status: ACK_STATUSES.DUPLICATE_SKIPPED,
+    })
     return {
       errorMessage: 'Acknowledgement send is already in progress or not retryable.',
       messageBody,
@@ -817,21 +901,69 @@ const sendAutomaticAcknowledgement = async ({
     status: ACK_STATUSES.SENDING,
   })
 
-  await updateIncomingAcknowledgement(pool, messageId, {
-    errorMessage: null,
-    message: messageBody,
-    status: ACK_STATUSES.SENDING,
-  })
+  try {
+    await updateIncomingAcknowledgement(pool, messageId, {
+      errorMessage: null,
+      message: messageBody,
+      status: ACK_STATUSES.SENDING,
+    })
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'Unable to update acknowledgement source status before sending.'
+
+    logWhatsAppOutgoingEarlyReturn({
+      currentFile: 'backend/whatsappAckService.js',
+      currentFunction: 'sendAutomaticAcknowledgement',
+      destinationPhone: incomingMessageRecord.senderPhone,
+      messageId,
+      messagePurpose: ACK_PURPOSE,
+      piNumber: resolvedPiNumber,
+      reason: 'Source acknowledgement status update failed before shared sender.',
+      senderPhone: incomingMessageRecord.senderPhone,
+      sharedSenderCalled: false,
+      sqlstate: error?.code ?? '',
+      status: ACK_STATUSES.FAILED,
+    })
+
+    return {
+      attempts: 0,
+      errorCode: error?.code || 'SOURCE_ACKNOWLEDGEMENT_UPDATE_FAILED',
+      errorMessage,
+      failureCategory: 'DATABASE_ERROR',
+      messageBody,
+      metaMessageId: '',
+      metaResponse: null,
+      ok: false,
+      retryScheduled: false,
+      sendLogId: null,
+      status: ACK_STATUSES.FAILED,
+    }
+  }
 
   if (config.initialDelayMs > 0) {
     await sleep(config.initialDelayMs)
   }
 
-  const sendResult = await sendWithRetry({
+  logOutgoingPipeline('Acknowledgement requested', {
+    currentFunction: 'sendAutomaticAcknowledgement',
+    destinationPhone: incomingMessageRecord.senderPhone,
+    messageId,
+    piNumber: resolvedPiNumber,
+    senderPhone: incomingMessageRecord.senderPhone,
+    sharedSenderCalled: true,
+  })
+  const sendResult = await sendTextMessage({
     body: messageBody,
     contextMessageId: messageId,
     env,
     fetchImpl,
+    piNumber: resolvedPiNumber,
+    pool,
+    purpose: MESSAGE_PURPOSES.AUTO_ACKNOWLEDGEMENT,
+    sourceMessageRecordId: incomingMessageRecord.id || null,
+    sourceWhatsappMessageId: messageId,
     to: incomingMessageRecord.senderPhone,
   })
   const sentAt = sendResult.ok ? new Date().toISOString() : null
@@ -854,14 +986,28 @@ const sendAutomaticAcknowledgement = async ({
     status: sendResult.status,
   })
 
+  logOutgoingPipeline('Acknowledgement function completed', {
+    currentFunction: 'sendAutomaticAcknowledgement',
+    destinationPhone: incomingMessageRecord.senderPhone,
+    messageId,
+    piNumber: resolvedPiNumber,
+    senderPhone: incomingMessageRecord.senderPhone,
+    sendLogId: sendResult.sendLogId,
+    sharedSenderCalled: true,
+    status: sendResult.status,
+  })
+
   return {
     attempts: sendResult.attempts,
     errorCode: sendResult.errorCode ?? '',
     errorMessage: sendResult.errorMessage ?? '',
+    failureCategory: sendResult.failureCategory ?? '',
     messageBody,
     metaMessageId: sendResult.metaMessageId ?? '',
     metaResponse: sendResult.metaResponse ?? null,
+    nextRetryAt: sendResult.nextRetryAt ?? null,
     ok: sendResult.ok,
+    retryScheduled: Boolean(sendResult.retryScheduled),
     status: sendResult.status,
   }
 }

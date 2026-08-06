@@ -21,8 +21,10 @@ const testEnv = {
 }
 
 const createAcknowledgementPool = ({
+  failIncomingUpdate = false,
   incoming = {},
   outgoing = null,
+  sendLogs = [],
 } = {}) => {
   const state = {
     incoming: {
@@ -32,6 +34,8 @@ const createAcknowledgementPool = ({
       ...incoming,
     },
     outgoing,
+    sendLogs,
+    incomingUpdates: [],
     schemaQueries: 0,
   }
 
@@ -56,6 +60,74 @@ const createAcknowledgementPool = ({
         /FROM\s+tran_whatsapp_outgoing_messages/i.test(sql)
       ) {
         return { rows: state.outgoing ? [state.outgoing] : [] }
+      }
+
+      if (
+        /SELECT\s+send_log_id,\s+meta_message_id/i.test(sql) &&
+        /FROM\s+tran_whatsapp_send_log/i.test(sql)
+      ) {
+        const sent = state.sendLogs.find(
+          (log) =>
+            log.attempt_status === 'SENT' &&
+            log.message_purpose === params[0] &&
+            (log.source_whatsapp_message_id || '') === (params[1] || '') &&
+            (log.pi_number || '') === (params[2] || ''),
+        )
+
+        return { rows: sent ? [sent] : [] }
+      }
+
+      if (/INSERT INTO\s+tran_whatsapp_send_log/i.test(sql)) {
+        const sendLog = {
+          attempt_number: params[12],
+          attempt_status: params[13],
+          destination_phone: params[4],
+          message_body: params[7],
+          message_purpose: params[5],
+          message_type: params[6],
+          meta_message_id: '',
+          pi_number: params[2],
+          retry_batch_id: params[15],
+          send_log_id: state.sendLogs.length + 1,
+          source_message_record_id: params[0],
+          source_whatsapp_message_id: params[1],
+        }
+
+        state.sendLogs.push(sendLog)
+
+        return { rows: [{ send_log_id: sendLog.send_log_id }] }
+      }
+
+      if (/UPDATE\s+tran_whatsapp_send_log/i.test(sql)) {
+        const targetId = Number(params[0])
+        const sendLog = state.sendLogs.find((log) => log.send_log_id === targetId)
+
+        if (sendLog) {
+          if (/attempt_status = COALESCE/i.test(sql)) {
+            sendLog.attempt_status = params[1] ?? sendLog.attempt_status
+            sendLog.failure_category = params[2]
+            sendLog.retryable = params[3] ?? sendLog.retryable
+            sendLog.http_status = params[4]
+            sendLog.http_status_text = params[5]
+            sendLog.meta_message_id = params[6] || sendLog.meta_message_id || ''
+            sendLog.meta_response = params[7]
+            sendLog.meta_error_code = params[9]
+            sendLog.meta_error_message = params[11]
+            sendLog.network_error_code = params[13]
+            sendLog.network_error_message = params[14]
+            sendLog.duration_ms = params[17]
+            sendLog.next_retry_at = params[18]
+          } else if (/next_retry_at = \$2/i.test(sql)) {
+            sendLog.next_retry_at = params[1]
+            sendLog.parent_send_log_id = params[2]
+          } else if (/parent_send_log_id = \$2/i.test(sql)) {
+            sendLog.parent_send_log_id = params[1]
+          } else if (/attempt_status = \$2/i.test(sql)) {
+            sendLog.attempt_status = params[1]
+          }
+        }
+
+        return { rows: [] }
       }
 
       if (/INSERT INTO\s+tran_whatsapp_outgoing_messages/i.test(sql)) {
@@ -83,6 +155,17 @@ const createAcknowledgementPool = ({
       }
 
       if (/UPDATE\s+tran_whatsapp_pi_messages/i.test(sql)) {
+        state.incomingUpdates.push({
+          params,
+          sql,
+        })
+
+        if (failIncomingUpdate) {
+          const error = new Error('simulated source update failure')
+          error.code = '42804'
+          throw error
+        }
+
         state.incoming = {
           ...state.incoming,
           acknowledgement_attempts: params[6] ?? state.incoming.acknowledgement_attempts,
@@ -92,9 +175,18 @@ const createAcknowledgementPool = ({
           acknowledgement_status: params[1],
           acknowledgement_whatsapp_message_id:
             params[4] ?? state.incoming.acknowledgement_whatsapp_message_id,
+          reply_status: params[7] ?? state.incoming.reply_status,
         }
 
-        return { rows: [] }
+        return {
+          rowCount: 1,
+          rows: [{
+            acknowledgement_status: state.incoming.acknowledgement_status,
+            message_id: params[0],
+            pi_summary_status: state.incoming.pi_summary_status,
+            reply_status: state.incoming.reply_status,
+          }],
+        }
       }
 
       throw new Error(`Unexpected SQL in acknowledgement test: ${sql}`)
@@ -135,7 +227,7 @@ test('development allow-list permits only registered tester numbers', () => {
   assert.equal(isAllowedTesterNumber('918888888888', config), false)
 })
 
-test('preconditions block non-allow-listed numbers', () => {
+test('preconditions defer non-allow-listed numbers to sender diagnostics', () => {
   const config = getAcknowledgementConfig(testEnv)
   const result = validateAcknowledgementPreconditions({
     config,
@@ -147,7 +239,7 @@ test('preconditions block non-allow-listed numbers', () => {
     processingStatus: 'MANUAL_REVIEW',
   })
 
-  assert.equal(result.status, ACK_STATUSES.TEST_NUMBER_NOT_ALLOWED)
+  assert.equal(result.status, '')
 })
 
 test('preconditions block missing sender phone', () => {
@@ -274,7 +366,95 @@ test('automatic acknowledgement skips an already sent incoming message', async (
   assert.equal(result.metaMessageId, 'wamid.outgoing-existing')
 })
 
-test('automatic acknowledgement retries temporary Meta failure and stores message ID', async () => {
+test('automatic acknowledgement source update uses explicit typed placeholders and nulls', async () => {
+  const pool = createAcknowledgementPool()
+  let fetchCalls = 0
+  const result = await sendAutomaticAcknowledgement({
+    env: testEnv,
+    fetchImpl: async () => {
+      fetchCalls += 1
+      assert.equal(pool.state.sendLogs.length, 1)
+      assert.equal(pool.state.sendLogs[0].attempt_status, 'SENDING')
+
+      return new Response(JSON.stringify({
+        messages: [{ id: 'wamid.ack-sent' }],
+      }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      })
+    },
+    incomingMessageRecord: {
+      id: 77,
+      messageId: 'wamid.typed-source',
+      messageType: 'text',
+      senderPhone: '917733850017',
+      sourceType: 'text',
+    },
+    piNumber: 'HAL-0099',
+    pool,
+    processingStatus: 'DRAFT_PI_CREATED',
+  })
+
+  const firstUpdate = pool.state.incomingUpdates[0]
+  const finalUpdate = pool.state.incomingUpdates.at(-1)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, ACK_STATUSES.SENT)
+  assert.equal(fetchCalls, 1)
+  assert.match(firstUpdate.sql, /acknowledgement_status = \$2::varchar/)
+  assert.match(firstUpdate.sql, /acknowledgement_message = COALESCE\(\$3::text/)
+  assert.match(firstUpdate.sql, /acknowledgement_sent_at = COALESCE\(\$4::timestamptz/)
+  assert.match(firstUpdate.sql, /COALESCE\(\$5::varchar/)
+  assert.match(firstUpdate.sql, /acknowledgement_attempts = COALESCE\(\$7::integer/)
+  assert.match(firstUpdate.sql, /reply_status = COALESCE\(\$8::varchar/)
+  assert.doesNotMatch(firstUpdate.sql, /reply_status = \$2\b/)
+  assert.equal(firstUpdate.params[1], ACK_STATUSES.SENDING)
+  assert.equal(firstUpdate.params[3], null)
+  assert.equal(firstUpdate.params[4], null)
+  assert.equal(firstUpdate.params[6], null)
+  assert.equal(firstUpdate.params[7], ACK_STATUSES.SENDING)
+  assert.equal(typeof firstUpdate.params[8], 'boolean')
+  assert.equal(finalUpdate.params[1], ACK_STATUSES.SENT)
+  assert.equal(finalUpdate.params[4], 'wamid.ack-sent')
+  assert.equal(finalUpdate.params[6], 1)
+  assert.equal(finalUpdate.params[7], ACK_STATUSES.SENT)
+})
+
+test('failed SENDING source update returns database error before shared sender', async () => {
+  let fetchCalls = 0
+  const pool = createAcknowledgementPool({
+    failIncomingUpdate: true,
+  })
+
+  const result = await sendAutomaticAcknowledgement({
+    env: testEnv,
+    fetchImpl: async () => {
+      fetchCalls += 1
+
+      return new Response('{}', { status: 200 })
+    },
+    incomingMessageRecord: {
+      id: 78,
+      messageId: 'wamid.source-update-fails',
+      messageType: 'text',
+      senderPhone: '917733850017',
+      sourceType: 'text',
+    },
+    piNumber: 'HAL-0100',
+    pool,
+    processingStatus: 'DRAFT_PI_CREATED',
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.status, ACK_STATUSES.FAILED)
+  assert.equal(result.failureCategory, 'DATABASE_ERROR')
+  assert.equal(result.errorCode, '42804')
+  assert.equal(fetchCalls, 0)
+  assert.equal(pool.state.sendLogs.length, 0)
+  assert.equal(pool.state.incomingUpdates.length, 1)
+})
+
+test('automatic acknowledgement schedules temporary Meta failure without blocking webhook', async () => {
   let fetchCalls = 0
   const pool = createAcknowledgementPool()
   const result = await sendAutomaticAcknowledgement({
@@ -282,18 +462,12 @@ test('automatic acknowledgement retries temporary Meta failure and stores messag
     fetchImpl: async () => {
       fetchCalls += 1
 
-      if (fetchCalls === 1) {
-        return new Response(JSON.stringify({
-          error: {
-            code: 2,
-            message: 'Temporary service issue',
-          },
-        }), { status: 500 })
-      }
-
       return new Response(JSON.stringify({
-        messages: [{ id: 'wamid.sent-after-retry' }],
-      }), { status: 200 })
+        error: {
+          code: 2,
+          message: 'Temporary service issue',
+        },
+      }), { status: 500 })
     },
     incomingMessageRecord: {
       id: 55,
@@ -307,12 +481,12 @@ test('automatic acknowledgement retries temporary Meta failure and stores messag
     processingStatus: 'PI_CREATED',
   })
 
-  assert.equal(result.ok, true)
-  assert.equal(result.status, ACK_STATUSES.SENT)
-  assert.equal(result.attempts, 2)
-  assert.equal(fetchCalls, 2)
-  assert.equal(result.metaMessageId, 'wamid.sent-after-retry')
-  assert.equal(pool.state.outgoing.meta_message_id, 'wamid.sent-after-retry')
-  assert.equal(pool.state.incoming.acknowledgement_status, ACK_STATUSES.SENT)
-  assert.equal(pool.state.incoming.acknowledgement_attempts, 2)
+  assert.equal(result.ok, false)
+  assert.equal(result.status, ACK_STATUSES.RETRY_SCHEDULED)
+  assert.equal(result.attempts, 1)
+  assert.equal(fetchCalls, 1)
+  assert.equal(pool.state.outgoing.send_status, ACK_STATUSES.RETRY_SCHEDULED)
+  assert.equal(pool.state.incoming.acknowledgement_status, ACK_STATUSES.RETRY_SCHEDULED)
+  assert.equal(pool.state.incoming.acknowledgement_attempts, 1)
+  assert.equal(pool.state.sendLogs.some((log) => log.attempt_status === 'RETRY_SCHEDULED'), true)
 })

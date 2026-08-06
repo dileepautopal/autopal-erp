@@ -62,6 +62,15 @@ import {
   searchPIs,
 } from './piSearchService.js'
 import { createWhatsappPIRouter } from './whatsappPi.js'
+import { startWhatsAppSendRetryWorker } from './whatsappSendRetryWorker.js'
+import {
+  MESSAGE_PURPOSES,
+  SEND_ATTEMPT_STATUSES,
+  SEND_LOG_TABLE_NAME,
+  createManualWhatsAppTestLog,
+  getWhatsAppRetryPolicy,
+  sendLoggedWhatsAppTextMessage,
+} from './whatsappSendService.js'
 
 const { Pool } = pg
 
@@ -95,6 +104,20 @@ const ERP_INTELLIGENCE_TABLE_NAMES = {
   product: PRODUCT_TABLE_NAME,
   user: USER_TABLE_NAME,
   userRights: USER_RIGHTS_TABLE_NAME,
+}
+const WHATSAPP_PI_TABLE_NAMES = {
+  city: CITY_TABLE_NAME,
+  company: COMPANY_TABLE_NAME,
+  companyCategoryMapping: COMPANY_CATEGORY_MAPPING_TABLE_NAME,
+  country: COUNTRY_TABLE_NAME,
+  customer: CUSTOMER_TABLE_NAME,
+  customerDiscount: CUSTOMER_DISCOUNT_TABLE_NAME,
+  partyType: PARTY_TYPE_TABLE_NAME,
+  piMaster: RMKT_PI_MASTER_TABLE_NAME,
+  piTran: RMKT_PI_TRAN_TABLE_NAME,
+  product: PRODUCT_TABLE_NAME,
+  state: STATE_TABLE_NAME,
+  tradingRate: TRADING_RATE_TABLE_NAME,
 }
 const CUSTOMER_DUPLICATE_MESSAGE =
   'Customer with same name, address, and city already exists.'
@@ -4054,6 +4077,172 @@ const getAdminUserList = async () => {
   }))
 }
 
+const getDefaultWhatsAppDiagnosticPhone = () =>
+  String(
+    process.env.WHATSAPP_DIAGNOSTIC_TEST_PHONE ??
+      process.env.WHATSAPP_ALLOWED_TEST_NUMBERS?.split(',')?.[0] ??
+      '917733850017',
+  ).trim()
+
+const getWhatsAppSendDiagnosticStatus = async () => {
+  const status = {
+    workerRunning: Boolean(whatsappRetryWorker?.enabled),
+    retryEnabled: Boolean(getWhatsAppRetryPolicy(process.env).enabled),
+    databaseConnected: false,
+    sendLogTableExists: false,
+    sendLogRowCount: 0,
+    lastSendAttempt: null,
+    sharedSendServiceLoaded: true,
+  }
+
+  await pool.query('SELECT 1')
+  status.databaseConnected = true
+
+  const tableResult = await pool.query('SELECT to_regclass($1) AS table_name', [
+    SEND_LOG_TABLE_NAME,
+  ])
+  status.sendLogTableExists = Boolean(tableResult.rows[0]?.table_name)
+
+  if (!status.sendLogTableExists) {
+    return status
+  }
+
+  const [countResult, lastResult] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::integer AS row_count FROM ${SEND_LOG_TABLE_NAME}`),
+    pool.query(
+      `
+        SELECT
+          send_log_id,
+          message_purpose,
+          attempt_status,
+          meta_message_id,
+          created_at,
+          request_completed_at
+        FROM ${SEND_LOG_TABLE_NAME}
+        ORDER BY created_at DESC, send_log_id DESC
+        LIMIT 1
+      `,
+    ),
+  ])
+
+  status.sendLogRowCount = Number(countResult.rows[0]?.row_count ?? 0)
+  status.lastSendAttempt = lastResult.rows[0] ?? null
+
+  return status
+}
+
+app.get('/api/admin/whatsapp-send/status', async (request, response, next) => {
+  try {
+    const adminUser = await requireAdminUser(request, response)
+
+    if (!adminUser) {
+      return
+    }
+
+    response.json(await getWhatsAppSendDiagnosticStatus())
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/admin/whatsapp-send/test-log', async (request, response, next) => {
+  try {
+    const adminUser = await requireAdminUser(request, response)
+
+    if (!adminUser) {
+      return
+    }
+
+    const result = await createManualWhatsAppTestLog({
+      body: request.body?.body || 'AUTOPAL WhatsApp manual send-log diagnostic.',
+      destinationPhone: request.body?.to || getDefaultWhatsAppDiagnosticPhone(),
+      piNumber: request.body?.piNumber || '',
+      pool,
+      sourceWhatsappMessageId:
+        request.body?.sourceWhatsappMessageId || `manual-test-log-${Date.now()}`,
+    })
+
+    response.json({
+      ok: true,
+      inserted: true,
+      purpose: MESSAGE_PURPOSES.MANUAL_TEST,
+      sendLogId: result.sendLogId,
+      status: SEND_ATTEMPT_STATUSES.SKIPPED,
+    })
+  } catch (error) {
+    console.error('WhatsApp manual test-log insert failed', {
+      column: error?.column ?? '',
+      constraint: error?.constraint ?? '',
+      detail: error?.detail ?? '',
+      message: error?.message ?? String(error),
+      sqlstate: error?.code ?? '',
+      table: error?.table ?? '',
+    })
+    next(error)
+  }
+})
+
+app.post('/api/admin/whatsapp-send/test-live', async (request, response, next) => {
+  try {
+    const adminUser = await requireAdminUser(request, response)
+
+    if (!adminUser) {
+      return
+    }
+
+    const destinationPhone = request.body?.to || getDefaultWhatsAppDiagnosticPhone()
+    const body = request.body?.body || 'AUTOPAL WhatsApp live diagnostic test message.'
+    const sourceWhatsappMessageId =
+      request.body?.sourceWhatsappMessageId || `manual-test-live-${Date.now()}`
+
+    const sendResult = await sendLoggedWhatsAppTextMessage({
+      body,
+      env: process.env,
+      fetchImpl: globalThis.fetch,
+      piNumber: request.body?.piNumber || '',
+      pool,
+      purpose: MESSAGE_PURPOSES.MANUAL_TEST,
+      sourceWhatsappMessageId,
+      to: destinationPhone,
+    })
+
+    response.json({
+      ok: sendResult.ok,
+      liveMessageSent: Boolean(sendResult.ok && sendResult.metaMessageId),
+      request: {
+        body,
+        headers: {
+          Authorization: 'Bearer [REDACTED]',
+          'Content-Type': 'application/json',
+        },
+        purpose: MESSAGE_PURPOSES.MANUAL_TEST,
+        to: destinationPhone,
+      },
+      response: {
+        errorCode: sendResult.errorCode,
+        errorMessage: sendResult.errorMessage,
+        failureCategory: sendResult.failureCategory,
+        httpStatus: sendResult.httpStatus,
+        metaMessageId: sendResult.metaMessageId,
+        metaResponse: sendResult.metaResponse,
+        retryScheduled: sendResult.retryScheduled,
+        status: sendResult.status,
+      },
+      sendLogId: sendResult.sendLogId,
+    })
+  } catch (error) {
+    console.error('WhatsApp live diagnostic send failed', {
+      column: error?.column ?? '',
+      constraint: error?.constraint ?? '',
+      detail: error?.detail ?? '',
+      message: error?.message ?? String(error),
+      sqlstate: error?.code ?? '',
+      table: error?.table ?? '',
+    })
+    next(error)
+  }
+})
+
 app.get('/api/admin/users', async (request, response, next) => {
   try {
     const adminUser = await requireAdminUser(request, response)
@@ -5182,22 +5371,18 @@ app.use(
   createWhatsappPIRouter({
     pool,
     saveRMarketPIRecord,
-    tableNames: {
-      city: CITY_TABLE_NAME,
-      company: COMPANY_TABLE_NAME,
-      companyCategoryMapping: COMPANY_CATEGORY_MAPPING_TABLE_NAME,
-      country: COUNTRY_TABLE_NAME,
-      customer: CUSTOMER_TABLE_NAME,
-      customerDiscount: CUSTOMER_DISCOUNT_TABLE_NAME,
-      partyType: PARTY_TYPE_TABLE_NAME,
-      piMaster: RMKT_PI_MASTER_TABLE_NAME,
-      piTran: RMKT_PI_TRAN_TABLE_NAME,
-      product: PRODUCT_TABLE_NAME,
-      state: STATE_TABLE_NAME,
-      tradingRate: TRADING_RATE_TABLE_NAME,
-    },
+    tableNames: WHATSAPP_PI_TABLE_NAMES,
   }),
 )
+
+const whatsappRetryWorker = startWhatsAppSendRetryWorker({
+  pool,
+  tableNames: WHATSAPP_PI_TABLE_NAMES,
+})
+
+if (whatsappRetryWorker.enabled) {
+  console.log('AUTOPAL WhatsApp send retry worker enabled')
+}
 
 app.get(/^(?!\/api).*/, (_request, response, next) => {
   if (!fs.existsSync(INDEX_HTML_PATH)) {
