@@ -49,6 +49,17 @@ Date: 22/07/2026
 SB 102 H4 P43t P LHT E - 1000 Nos`,
   },
 })
+await request('media capture simulation', '/media-capture', {
+  body: {
+    caption: 'Sample order image',
+    mediaId: 'media-test-image-001',
+    messageType: 'image',
+    mimeType: 'image/jpeg',
+    senderName: 'Dileep Test',
+    senderPhone: '917733850017',
+    sha256: 'sample-image-sha256',
+  },
+})
 await request('customer matcher', '/customer-match', {
   body: {
     city: 'Navagam',

@@ -38,6 +38,18 @@ import {
   logWhatsAppOutgoingEarlyReturn,
   logWhatsAppOutgoingTrace,
 } from './whatsappOutgoingTrace.js'
+import {
+  captureIncomingMedia,
+  ensureWhatsAppMediaCaptureSchema,
+  extractMediaEnvelope,
+  getSafeMediaLogDetails,
+  isWhatsappMediaMessage,
+} from './whatsappMediaCaptureService.js'
+import {
+  downloadCapturedWhatsAppMedia,
+  ensureWhatsAppMediaDownloadSchema,
+  getSafeMediaDownloadLogDetails,
+} from './whatsappMediaDownloadService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1133,21 +1145,25 @@ const getInitialWhatsappMessageText = (message) => {
     return message.document?.caption ?? ''
   }
 
+  if (message?.type === 'video') {
+    return message.video?.caption ?? ''
+  }
+
   return ''
 }
 
 const getWhatsappMediaInfo = (message) => {
-  const mediaPayload = message?.[message?.type] ?? {}
-  const mediaId = mediaPayload.id ?? ''
-  const caption = mediaPayload.caption ?? ''
-  const fileName = mediaPayload.filename ?? ''
-  const mediaType = mediaPayload.mime_type ?? ''
+  const mediaEnvelope = extractMediaEnvelope(message)
 
   return {
-    caption,
-    fileName,
-    mediaId,
-    mediaType,
+    caption: mediaEnvelope.caption,
+    fileName: mediaEnvelope.fileName,
+    mediaAnimated: mediaEnvelope.animated,
+    mediaId: mediaEnvelope.mediaId,
+    mediaMimeType: mediaEnvelope.mediaMimeType,
+    mediaSha256: mediaEnvelope.mediaSha256,
+    mediaType: mediaEnvelope.mediaType,
+    mediaVoice: mediaEnvelope.voice,
   }
 }
 
@@ -1245,6 +1261,17 @@ const ensureWhatsappMessageSchema = async (pool) => {
           message_type varchar(40),
           media_id varchar(160),
           media_type varchar(120),
+          media_mime_type varchar(255),
+          media_sha256 varchar(255),
+          media_voice boolean,
+          media_animated boolean,
+          media_capture_status varchar(50),
+          media_capture_error text,
+          media_download_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          media_downloaded_at timestamptz,
+          media_download_error text,
+          media_file_size bigint,
+          media_download_sha256 varchar(128),
           media_path text,
           file_name text,
           caption text,
@@ -1278,6 +1305,17 @@ const ensureWhatsappMessageSchema = async (pool) => {
         ALTER TABLE ${WHATSAPP_MESSAGE_TABLE_NAME}
           ADD COLUMN IF NOT EXISTS media_id varchar(160),
           ADD COLUMN IF NOT EXISTS media_type varchar(120),
+          ADD COLUMN IF NOT EXISTS media_mime_type varchar(255),
+          ADD COLUMN IF NOT EXISTS media_sha256 varchar(255),
+          ADD COLUMN IF NOT EXISTS media_voice boolean,
+          ADD COLUMN IF NOT EXISTS media_animated boolean,
+          ADD COLUMN IF NOT EXISTS media_capture_status varchar(50),
+          ADD COLUMN IF NOT EXISTS media_capture_error text,
+          ADD COLUMN IF NOT EXISTS media_download_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS media_downloaded_at timestamptz,
+          ADD COLUMN IF NOT EXISTS media_download_error text,
+          ADD COLUMN IF NOT EXISTS media_file_size bigint,
+          ADD COLUMN IF NOT EXISTS media_download_sha256 varchar(128),
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1354,6 +1392,8 @@ const ensureWhatsappMessageSchema = async (pool) => {
         CREATE INDEX IF NOT EXISTS idx_tran_whatsapp_pi_messages_received_at
         ON ${WHATSAPP_MESSAGE_TABLE_NAME} (received_at DESC, id DESC)
       `)
+      await ensureWhatsAppMediaCaptureSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppMediaDownloadSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -1488,8 +1528,25 @@ const mapIncomingWhatsappMessageRow = (row) => ({
   finalPiNo: row.final_pi_no ?? '',
   importStatus: row.import_status ?? '',
   mediaId: row.media_id ?? '',
+  mediaMimeType: row.media_mime_type ?? '',
   mediaPath: row.media_path ?? '',
+  mediaSha256: row.media_sha256 ?? '',
   mediaType: row.media_type ?? '',
+  mediaVoice: row.media_voice === null || row.media_voice === undefined
+    ? null
+    : Boolean(row.media_voice),
+  mediaAnimated: row.media_animated === null || row.media_animated === undefined
+    ? null
+    : Boolean(row.media_animated),
+  mediaCaptureStatus: row.media_capture_status ?? '',
+  mediaCaptureError: row.media_capture_error ?? '',
+  mediaDownloadStatus: row.media_download_status ?? 'PENDING',
+  mediaDownloadedAt: row.media_downloaded_at ?? null,
+  mediaDownloadError: row.media_download_error ?? '',
+  mediaFileSize: row.media_file_size === null || row.media_file_size === undefined
+    ? null
+    : Number(row.media_file_size),
+  mediaDownloadSha256: row.media_download_sha256 ?? '',
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
@@ -1539,6 +1596,17 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         message_type,
         media_id,
         media_type,
+        media_mime_type,
+        media_sha256,
+        media_voice,
+        media_animated,
+        media_capture_status,
+        media_capture_error,
+        media_download_status,
+        media_downloaded_at,
+        media_download_error,
+        media_file_size,
+        media_download_sha256,
         media_path,
         file_name,
         caption,
@@ -1599,6 +1667,17 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
         message_type,
         media_id,
         media_type,
+        media_mime_type,
+        media_sha256,
+        media_voice,
+        media_animated,
+        media_capture_status,
+        media_capture_error,
+        media_download_status,
+        media_downloaded_at,
+        media_download_error,
+        media_file_size,
+        media_download_sha256,
         media_path,
         file_name,
         caption,
@@ -1812,8 +1891,12 @@ const saveIncomingWhatsappMessage = async (
   {
     caption = '',
     fileName = '',
+    mediaAnimated = null,
     mediaId = '',
+    mediaMimeType = '',
+    mediaSha256 = '',
     mediaType = '',
+    mediaVoice = null,
     messageId,
     messageText,
     messageType,
@@ -1841,6 +1924,10 @@ const saveIncomingWhatsappMessage = async (
           message_type,
           media_id,
           media_type,
+          media_mime_type,
+          media_sha256,
+          media_voice,
+          media_animated,
           file_name,
           caption,
           source_type,
@@ -1867,10 +1954,14 @@ const saveIncomingWhatsappMessage = async (
           $7,
           $8,
           $9,
-          $10,
-          $11,
-          $11,
-          $12::jsonb,
+          $10::boolean,
+          $11::boolean,
+          $12,
+          $13,
+          $14,
+          $15,
+          $15,
+          $16::jsonb,
           'received',
           'RECEIVED',
           'RECEIVED',
@@ -1891,6 +1982,17 @@ const saveIncomingWhatsappMessage = async (
         message_type,
         media_id,
         media_type,
+        media_mime_type,
+        media_sha256,
+        media_voice,
+        media_animated,
+        media_capture_status,
+        media_capture_error,
+        media_download_status,
+        media_downloaded_at,
+        media_download_error,
+        media_file_size,
+        media_download_sha256,
         media_path,
         file_name,
         caption,
@@ -1938,6 +2040,10 @@ const saveIncomingWhatsappMessage = async (
       toLimitedText(messageType, 40),
       toLimitedText(mediaId, 160),
       toLimitedText(mediaType, 120),
+      toLimitedText(mediaMimeType, 255),
+      toLimitedText(mediaSha256, 255),
+      mediaVoice,
+      mediaAnimated,
       toLimitedText(fileName, 250),
       toLimitedText(caption, 500),
       toLimitedText(sourceType || messageType, 40),
@@ -1965,6 +2071,17 @@ const saveIncomingWhatsappMessage = async (
         message_type,
         media_id,
         media_type,
+        media_mime_type,
+        media_sha256,
+        media_voice,
+        media_animated,
+        media_capture_status,
+        media_capture_error,
+        media_download_status,
+        media_downloaded_at,
+        media_download_error,
+        media_file_size,
+        media_download_sha256,
         media_path,
         file_name,
         caption,
@@ -2068,7 +2185,7 @@ const updateIncomingWhatsappMessageProcessing = async (
         processing_status = COALESCE($18, processing_status),
         reply_status = COALESCE($19, reply_status),
         error_details = COALESCE($20::jsonb, error_details),
-        customer_confirmation_status = COALESCE($21, customer_confirmation_status),
+        customer_confirmation_status = COALESCE($21::varchar, customer_confirmation_status),
         updated_at = CURRENT_TIMESTAMP
       WHERE message_id = $1
       RETURNING
@@ -2080,6 +2197,17 @@ const updateIncomingWhatsappMessageProcessing = async (
         message_type,
         media_id,
         media_type,
+        media_mime_type,
+        media_sha256,
+        media_voice,
+        media_animated,
+        media_capture_status,
+        media_capture_error,
+        media_download_status,
+        media_downloaded_at,
+        media_download_error,
+        media_file_size,
+        media_download_sha256,
         media_path,
         file_name,
         caption,
@@ -2497,6 +2625,111 @@ const processExistingCustomerConfirmationRow = async (
     piNumber: commandResult.confirmationResult?.piNumber ?? detectedCommand.piNumber,
     status: commandResult.confirmationResult?.status ?? commandResult.status,
   }
+}
+
+const captureSavedWhatsappMediaMessage = async (
+  dependencies,
+  {
+    contact = null,
+    duplicate = false,
+    message,
+    messageSource,
+    savedMessage,
+  } = {},
+) => {
+  const sourceRecord = savedMessage?.row ?? null
+  const envelope = extractMediaEnvelope(message, contact)
+
+  logWhatsappWebhook('whatsapp_media_capture_started', {
+    mediaId: envelope.mediaId,
+    mediaType: envelope.mediaType,
+    messageId: messageSource?.messageId ?? envelope.messageId,
+    messageType: envelope.messageType,
+    senderPhone: messageSource?.senderPhone ?? envelope.senderPhone,
+  })
+
+  const captureResult = await captureIncomingMedia({
+    contact,
+    message,
+    pool: dependencies.pool,
+    sourceRecord,
+    tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+  })
+  const safeDetails = getSafeMediaLogDetails(captureResult)
+
+  if (duplicate) {
+    logWhatsappWebhook('whatsapp_media_duplicate', safeDetails)
+  }
+
+  if (captureResult.mediaCaptureStatus === 'PARTIAL') {
+    logWhatsappWebhook('whatsapp_media_capture_partial', safeDetails)
+  }
+
+  if (captureResult.mediaCaptureStatus === 'FAILED') {
+    logWhatsappWebhook('whatsapp_media_capture_failed', safeDetails)
+  } else {
+    logWhatsappWebhook('whatsapp_media_capture_saved', safeDetails)
+  }
+
+  return {
+    captureResult,
+    webhookResult: createWebhookResult({
+      duplicate,
+      errors: captureResult.errors,
+      inserted: !duplicate,
+      messageId: messageSource?.messageId ?? captureResult.messageId,
+      parseStatus: captureResult.processingStatus,
+      piCreated: false,
+      saved: true,
+      warnings: captureResult.warnings,
+    }),
+  }
+}
+
+const downloadCapturedWhatsappMediaMessage = async (
+  dependencies,
+  {
+    messageId,
+  } = {},
+) => {
+  logWhatsappWebhook('whatsapp_media_download_started', {
+    messageId,
+  })
+
+  const downloadResult = await downloadCapturedWhatsAppMedia({
+    env: process.env,
+    fetchImpl: dependencies.fetch || globalThis.fetch,
+    messageId,
+    pool: dependencies.pool,
+    tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+  })
+  const safeDetails = getSafeMediaDownloadLogDetails(downloadResult)
+
+  if (downloadResult.skipped) {
+    logWhatsappWebhook('whatsapp_media_download_skipped_existing', safeDetails)
+  } else if (downloadResult.status === 'DOWNLOADED') {
+    logWhatsappWebhook('whatsapp_media_download_completed', safeDetails)
+  } else {
+    logWhatsappWebhook('whatsapp_media_download_failed', safeDetails)
+  }
+
+  return downloadResult
+}
+
+const scheduleWhatsappMediaDownload = (
+  dependencies,
+  {
+    messageId,
+  } = {},
+) => {
+  setImmediate(() => {
+    downloadCapturedWhatsappMediaMessage(dependencies, { messageId }).catch((error) => {
+      logWhatsappWebhook('whatsapp_media_download_failed', {
+        error: error instanceof Error ? error.message : String(error),
+        messageId,
+      })
+    })
+  })
 }
 
 const downloadWhatsappMedia = async (mediaId) => {
@@ -3001,6 +3234,17 @@ const processSavedWhatsappMessage = async (
     messageSource,
   },
 ) => {
+  if (isWhatsappMediaMessage(message)) {
+    const mediaCapture = await captureSavedWhatsappMediaMessage(dependencies, {
+      contact: messageSource?.rawPayload?.contact ?? existingMessage?.rawPayload?.contact ?? null,
+      message,
+      messageSource,
+      savedMessage: { row: existingMessage },
+    })
+
+    return mediaCapture.webhookResult
+  }
+
   let processingText = normalizeText(initialText)
   const mediaWarnings = []
 
@@ -3682,6 +3926,37 @@ export const createWhatsappPIRouter = (dependencies) => {
             messageId: messageSource.messageId,
             parseStatus: savedMessage.row?.parseStatus ?? 'DUPLICATE',
           })
+
+          if (isWhatsappMediaMessage(message)) {
+            const envelope = extractMediaEnvelope(message, contact)
+            console.log(`Duplicate media webhook ignored: ${messageSource.messageId}`)
+            logWhatsappWebhook('whatsapp_media_duplicate_ignored', {
+              existingCaptureStatus: savedMessage.row?.mediaCaptureStatus ?? '',
+              existingProcessingStatus: savedMessage.row?.processingStatus ?? '',
+              mediaId: savedMessage.row?.mediaId || envelope.mediaId,
+              mediaType: savedMessage.row?.mediaType || envelope.mediaType,
+              messageId: messageSource.messageId,
+              messageType: message.type,
+              senderPhone: messageSource.senderPhone,
+            })
+            results.push(
+              createWebhookResult({
+                duplicate: true,
+                errors: savedMessage.row?.parseErrors ?? [],
+                inserted: false,
+                messageId: messageSource.messageId,
+                parseStatus:
+                  savedMessage.row?.processingStatus ||
+                  savedMessage.row?.parseStatus ||
+                  'MEDIA_RECEIVED',
+                piCreated: Boolean(savedMessage.row?.piCreated),
+                saved: true,
+                warnings: savedMessage.row?.parseWarnings ?? [],
+              }),
+            )
+            continue
+          }
+
           const duplicateCommand = detectCustomerCommand(getCustomerCommandText(savedMessage.row, text))
 
           if (duplicateCommand.handled) {
@@ -3723,6 +3998,30 @@ export const createWhatsappPIRouter = (dependencies) => {
           inserted: true,
           messageId: messageSource.messageId,
         })
+
+        if (isWhatsappMediaMessage(message)) {
+          const mediaEnvelope = extractMediaEnvelope(message, contact)
+          logWhatsappWebhook('whatsapp_media_received', {
+            hasCaption: Boolean(mediaEnvelope.caption),
+            mediaId: mediaEnvelope.mediaId,
+            mediaType: mediaEnvelope.mediaType,
+            messageId: messageSource.messageId,
+            messageType: message.type,
+            mimeType: mediaEnvelope.mediaMimeType,
+            senderPhone: messageSource.senderPhone,
+          })
+          const mediaCapture = await captureSavedWhatsappMediaMessage(dependencies, {
+            contact,
+            message,
+            messageSource,
+            savedMessage,
+          })
+          scheduleWhatsappMediaDownload(dependencies, {
+            messageId: messageSource.messageId,
+          })
+          results.push(mediaCapture.webhookResult)
+          continue
+        }
 
         const savedCommand = detectCustomerCommand(getCustomerCommandText(savedMessage.row, text))
 

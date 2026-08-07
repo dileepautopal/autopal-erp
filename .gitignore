@@ -15,6 +15,7 @@ node_modules
 dist
 dist-ssr
 uploads
+storage
 *.local
 
 # Editor directories and files

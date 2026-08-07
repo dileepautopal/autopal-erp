@@ -19,6 +19,7 @@ type TestModuleId =
   | 'customer-confirmation'
   | 'whatsapp-acknowledgement'
   | 'phase1-verification'
+  | 'media-capture'
   | 'media-download'
   | 'ocr'
   | 'pdf-extract'
@@ -85,6 +86,7 @@ const modules: Array<{
   { id: 'customer-confirmation', label: 'Customer Confirmation Test', milestone: 'Milestone 1', ready: true },
   { id: 'whatsapp-acknowledgement', label: 'WhatsApp Acknowledgement Test', milestone: 'Milestone 1', ready: true },
   { id: 'phase1-verification', label: 'Phase 1 Verification & Closure', milestone: 'Milestone 1', ready: true },
+  { id: 'media-capture', label: 'Phase 2.1 - Media Capture Test', milestone: 'Phase 2.1', ready: true },
   { id: 'media-download', label: 'Image Download', milestone: 'Milestone 2', ready: false },
   { id: 'ocr', label: 'OCR', milestone: 'Milestone 3', ready: false },
   { id: 'pdf-extract', label: 'PDF Reader', milestone: 'Milestone 3', ready: false },
@@ -261,6 +263,10 @@ const getResultModuleId = (
     return 'phase1-verification'
   }
 
+  if (testName === 'media-capture') {
+    return 'media-capture'
+  }
+
   if (testName === 'system-check') {
     return 'system-check'
   }
@@ -311,6 +317,18 @@ export function AICommunicationTestConsole({
     mode: 'simulation',
     selectedTest: 'safe-suite',
     testerPhone: '917733850017',
+  })
+  const [mediaCaptureInput, setMediaCaptureInput] = useState({
+    animated: false,
+    caption: 'Sample caption for media capture',
+    fileName: 'sample.pdf',
+    mediaId: 'test-media-id-001',
+    messageType: 'image',
+    mimeType: 'image/jpeg',
+    senderName: 'Media Test Customer',
+    senderPhone: '917733850017',
+    sha256: 'sample-sha256',
+    voice: false,
   })
   const [result, setResult] = useState<APIResult | null>(null)
   const [lastRun, setLastRun] = useState<(() => Promise<void>) | null>(null)
@@ -445,6 +463,18 @@ export function AICommunicationTestConsole({
     })
   }
 
+  const runMediaCapture = async () => {
+    await runRequest('Phase 2.1 Media Capture Test', '/media-capture', {
+      ...mediaCaptureInput,
+      messageType: mediaCaptureInput.messageType.startsWith('document')
+        ? 'document'
+        : mediaCaptureInput.messageType === 'voice'
+          ? 'audio'
+          : mediaCaptureInput.messageType,
+      voice: mediaCaptureInput.messageType === 'voice' || mediaCaptureInput.voice,
+    })
+  }
+
   const runActiveModule = async () => {
     if (!activeModuleMeta.ready) {
       setResult({
@@ -462,6 +492,7 @@ export function AICommunicationTestConsole({
       'customer-confirmation': runCustomerConfirmation,
       'commercial-pi-calculation': runCommercialPICalculation,
       'draft-pi-summary': runDraftPISummary,
+      'media-capture': runMediaCapture,
       'product-match': runProductMatch,
       'phase1-verification': () => runPhase1Verification(),
       'system-check': runSystemCheck,
@@ -624,6 +655,147 @@ export function AICommunicationTestConsole({
               Default mode is simulation. Reset Test Data shows a cleanup preview only;
               it does not delete real customers, products, PIs, or WhatsApp records.
             </p>
+          </div>
+        </div>
+      )
+    }
+
+    if (activeModule === 'media-capture') {
+      const mediaTypeOptions = [
+        { label: 'Image', value: 'image' },
+        { label: 'PDF Document', value: 'document' },
+        { label: 'Excel Document', value: 'document-xlsx' },
+        { label: 'Word Document', value: 'document-docx' },
+        { label: 'Audio', value: 'audio' },
+        { label: 'Voice Note', value: 'voice' },
+        { label: 'Video', value: 'video' },
+        { label: 'Sticker', value: 'sticker' },
+      ]
+      const selectedType = mediaCaptureInput.messageType
+      const effectiveMessageType = selectedType.startsWith('document')
+        ? 'document'
+        : selectedType === 'voice'
+          ? 'audio'
+          : selectedType
+
+      return (
+        <div className="ai-console-form-stack">
+          <div className="ai-console-help">
+            <p>
+              Simulation only. Captures WhatsApp media metadata without calling Meta,
+              downloading files, running OCR, or creating a PI.
+            </p>
+          </div>
+          <div className="ai-console-grid">
+            <SelectField
+              label="Media type"
+              onChange={(event) => {
+                const value = event.target.value
+                const defaults: Record<string, Partial<typeof mediaCaptureInput>> = {
+                  audio: { fileName: '', mimeType: 'audio/ogg', voice: false },
+                  document: { fileName: 'sample.pdf', mimeType: 'application/pdf' },
+                  'document-docx': {
+                    fileName: 'sample.docx',
+                    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                  },
+                  'document-xlsx': {
+                    fileName: 'sample.xlsx',
+                    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  },
+                  image: { fileName: '', mimeType: 'image/jpeg' },
+                  sticker: { fileName: '', mimeType: 'image/webp' },
+                  video: { fileName: '', mimeType: 'video/mp4' },
+                  voice: { fileName: '', mimeType: 'audio/ogg', voice: true },
+                }
+
+                setMediaCaptureInput((current) => ({
+                  ...current,
+                  ...defaults[value],
+                  messageType: value,
+                }))
+              }}
+              options={mediaTypeOptions}
+              value={mediaCaptureInput.messageType}
+            />
+            <InputField
+              label="Sender Phone"
+              onChange={(event) =>
+                setMediaCaptureInput((current) => ({ ...current, senderPhone: event.target.value }))
+              }
+              value={mediaCaptureInput.senderPhone}
+            />
+            <InputField
+              label="Sender Name"
+              onChange={(event) =>
+                setMediaCaptureInput((current) => ({ ...current, senderName: event.target.value }))
+              }
+              value={mediaCaptureInput.senderName}
+            />
+            <InputField
+              label="Media ID"
+              onChange={(event) =>
+                setMediaCaptureInput((current) => ({ ...current, mediaId: event.target.value }))
+              }
+              value={mediaCaptureInput.mediaId}
+            />
+            <InputField
+              label="MIME Type"
+              onChange={(event) =>
+                setMediaCaptureInput((current) => ({ ...current, mimeType: event.target.value }))
+              }
+              value={mediaCaptureInput.mimeType}
+            />
+            <InputField
+              label="Filename"
+              onChange={(event) =>
+                setMediaCaptureInput((current) => ({ ...current, fileName: event.target.value }))
+              }
+              value={mediaCaptureInput.fileName}
+            />
+            <InputField
+              label="SHA-256"
+              onChange={(event) =>
+                setMediaCaptureInput((current) => ({ ...current, sha256: event.target.value }))
+              }
+              value={mediaCaptureInput.sha256}
+            />
+          </div>
+          <TextareaField
+            className="ai-console-textarea"
+            label="Caption"
+            onChange={(event) =>
+              setMediaCaptureInput((current) => ({ ...current, caption: event.target.value }))
+            }
+            value={mediaCaptureInput.caption}
+          />
+          <div className="ai-console-grid">
+            <label className="checkbox-row">
+              <input
+                checked={effectiveMessageType === 'audio' && mediaCaptureInput.voice}
+                disabled={effectiveMessageType !== 'audio'}
+                onChange={(event) =>
+                  setMediaCaptureInput((current) => ({ ...current, voice: event.target.checked }))
+                }
+                type="checkbox"
+              />
+              <span>Voice Flag</span>
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={effectiveMessageType === 'sticker' && mediaCaptureInput.animated}
+                disabled={effectiveMessageType !== 'sticker'}
+                onChange={(event) =>
+                  setMediaCaptureInput((current) => ({ ...current, animated: event.target.checked }))
+                }
+                type="checkbox"
+              />
+              <span>Animated Flag</span>
+            </label>
+          </div>
+          <div className="header-actions">
+            <Button disabled={isRunning} onClick={() => void runMediaCapture()}>
+              Run Media Capture Simulation
+            </Button>
           </div>
         </div>
       )
@@ -1698,6 +1870,61 @@ export function AICommunicationTestConsole({
     )
   }
 
+  const renderMediaCaptureResult = (testResult: APIResult) => {
+    const warnings = getMessageArray(testResult.warnings)
+    const errors = getMessageArray(testResult.errors)
+
+    return (
+      <div className="ai-console-result-content">
+        <section className="ai-console-result-section">
+          <h3>Test Summary</h3>
+          {renderSummaryGrid([
+            { label: 'Test Name', value: testResult.testName },
+            { label: 'Test Run ID', value: testResult.testRunId },
+            { label: 'Success', value: testResult.success },
+            { label: 'Final Status', value: testResult.finalStatus },
+            { label: 'Traffic Light', value: testResult.trafficLight },
+            { label: 'Mode', value: testResult.mode },
+            { label: 'Duration', value: formatDuration(testResult.durationMs) },
+          ])}
+        </section>
+
+        <section className="ai-console-result-section">
+          <h3>Media Envelope</h3>
+          {renderSummaryGrid([
+            { label: 'Detected Message Type', value: testResult.detectedMessageType },
+            { label: 'Media Type', value: testResult.mediaType },
+            { label: 'Media ID', value: testResult.mediaId },
+            { label: 'MIME Type', value: testResult.mediaMimeType },
+            { label: 'Filename', value: testResult.fileName },
+            { label: 'Caption', value: testResult.caption },
+            { label: 'SHA-256', value: testResult.mediaSha256 },
+            { label: 'Voice Flag', value: testResult.voice },
+            { label: 'Animated Flag', value: testResult.animated },
+          ])}
+        </section>
+
+        <section className="ai-console-result-section">
+          <h3>Capture Result</h3>
+          {renderSummaryGrid([
+            { label: 'Capture Status', value: testResult.mediaCaptureStatus },
+            { label: 'Processing Status', value: testResult.processingStatus },
+            { label: 'Database Row ID', value: testResult.databaseRowId },
+            { label: 'Duplicate Status', value: testResult.duplicate },
+            { label: 'PI Created', value: testResult.piCreated },
+            { label: 'Meta API Called', value: testResult.metaApiCalled },
+            { label: 'Download Attempted', value: testResult.downloadAttempted },
+            { label: 'OCR Attempted', value: testResult.ocrAttempted },
+          ])}
+        </section>
+
+        {renderMessageSection('Warnings', warnings, 'No warnings')}
+        {renderMessageSection('Errors', errors, 'No errors')}
+        {renderJSONDetails('Full Result JSON', testResult)}
+      </div>
+    )
+  }
+
   const renderPhase1VerificationResult = (testResult: APIResult) => {
     const cards = getArray(testResult.cards).filter(isRecord)
     const tests = getArray(testResult.tests).filter(isRecord)
@@ -1931,6 +2158,10 @@ export function AICommunicationTestConsole({
 
     if (resultModule === 'whatsapp-acknowledgement') {
       return renderWhatsappAcknowledgementResult(result)
+    }
+
+    if (resultModule === 'media-capture') {
+      return renderMediaCaptureResult(result)
     }
 
     if (resultModule === 'phase1-verification') {

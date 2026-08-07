@@ -106,12 +106,16 @@ const createExistingConfirmationPool = () => {
           message_type: params[4],
           media_id: params[5],
           media_type: params[6],
-          file_name: params[7],
-          caption: params[8],
-          source_type: params[9],
-          message_text: params[10],
-          raw_text: params[10],
-          raw_payload: params[11] ? JSON.parse(params[11]) : null,
+          media_mime_type: params[7],
+          media_sha256: params[8],
+          media_voice: params[9],
+          media_animated: params[10],
+          file_name: params[11],
+          caption: params[12],
+          source_type: params[13],
+          message_text: params[14],
+          raw_text: params[14],
+          raw_payload: params[15] ? JSON.parse(params[15]) : null,
           import_status: 'received',
           parse_status: 'RECEIVED',
           parse_warnings: [],
@@ -214,6 +218,124 @@ const createExistingConfirmationPool = () => {
       }
 
       throw new Error(`Unexpected SQL in existing confirmation test: ${sql}`)
+    },
+  }
+}
+
+const createMediaCapturePool = () => {
+  const state = {
+    captureUpdates: 0,
+    messageRows: [],
+    piCreationAttempts: 0,
+  }
+
+  return {
+    state,
+    async query(sql, params = []) {
+      if (/CREATE TABLE|ALTER TABLE|CREATE (UNIQUE )?INDEX/i.test(sql)) {
+        return { rowCount: 0, rows: [] }
+      }
+
+      if (/INSERT INTO\s+tran_whatsapp_webhook_events/i.test(sql)) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              id: 1,
+              received_at: new Date().toISOString(),
+              method: params[0],
+              url: params[1],
+              remote_address: params[2],
+              user_agent: params[3],
+              query: params[4] ? JSON.parse(params[4]) : {},
+              body: params[5] ? JSON.parse(params[5]) : null,
+              message_count: params[6],
+              response_status: params[7],
+              note: params[8],
+            },
+          ],
+        }
+      }
+
+      if (/INSERT INTO\s+tran_whatsapp_pi_messages/i.test(sql)) {
+        const row = {
+          id: state.messageRows.length + 1,
+          message_id: params[0],
+          received_at: params[1],
+          sender_name: params[2],
+          sender_phone: params[3],
+          message_type: params[4],
+          media_id: params[5],
+          media_type: params[6],
+          media_mime_type: params[7],
+          media_sha256: params[8],
+          media_voice: params[9],
+          media_animated: params[10],
+          file_name: params[11],
+          caption: params[12],
+          source_type: params[13],
+          message_text: params[14],
+          raw_text: params[14],
+          raw_payload: params[15] ? JSON.parse(params[15]) : null,
+          import_status: 'received',
+          parse_errors: [],
+          parse_status: 'RECEIVED',
+          parse_warnings: [],
+          pi_created: false,
+          processing_status: 'RECEIVED',
+        }
+
+        if (state.messageRows.some((messageRow) => messageRow.message_id === row.message_id)) {
+          return { rowCount: 0, rows: [] }
+        }
+
+        state.messageRows.push(row)
+        return { rowCount: 1, rows: [row] }
+      }
+
+      if (/FROM\s+tran_whatsapp_pi_messages/i.test(sql) && /WHERE\s+message_id\s*=\s*\$1/i.test(sql)) {
+        const row = state.messageRows.find((messageRow) => messageRow.message_id === params[0])
+        return { rowCount: row ? 1 : 0, rows: row ? [row] : [] }
+      }
+
+      if (/UPDATE\s+tran_whatsapp_pi_messages/i.test(sql) && /media_capture_status/i.test(sql)) {
+        state.captureUpdates += 1
+        const row = state.messageRows.find((messageRow) => messageRow.message_id === params[0])
+
+        if (!row) {
+          return { rowCount: 0, rows: [] }
+        }
+
+        Object.assign(row, {
+          media_id: params[1] || row.media_id,
+          media_type: params[2] || row.media_type,
+          media_mime_type: params[3] || row.media_mime_type,
+          media_sha256: params[4] || row.media_sha256,
+          media_voice: params[5],
+          media_animated: params[6],
+          file_name: params[7] || row.file_name,
+          caption: params[8] ?? row.caption,
+          message_text: params[8] ?? row.message_text,
+          raw_payload: params[9] ? JSON.parse(params[9]) : row.raw_payload,
+          processing_status: params[10],
+          parse_status: params[10],
+          parse_warnings: JSON.parse(params[11]),
+          parse_errors: JSON.parse(params[12]),
+          error_details: JSON.parse(params[13]),
+          media_capture_status: params[14],
+          media_capture_error: params[15] || null,
+          pi_created: false,
+        })
+
+        return { rowCount: 1, rows: [row] }
+      }
+
+      if (/INSERT INTO\s+master_pi_rmkt|INSERT INTO\s+tran_pi_rmkt/i.test(sql)) {
+        state.piCreationAttempts += 1
+        throw new Error('Media webhook must not create a PI.')
+      }
+
+      throw new Error(`Unexpected SQL in media capture test: ${sql}`)
     },
   }
 }
@@ -424,4 +546,194 @@ test('live webhook routes CONFIRM command before the order parser', async (t) =>
   assert.equal(pool.state.sendLogs[0].source_whatsapp_message_id, 'wamid.confirm-webhook-100')
   assert.equal(pool.state.sendLogs[0].meta_message_id, 'wamid.confirmation-ack-webhook')
   assert.equal(fetchCalls, 1)
+})
+
+test('live webhook captures image media without download, OCR, parser, or PI creation', async (t) => {
+  const pool = createMediaCapturePool()
+  let fetchCalls = 0
+  const app = express()
+
+  app.use(express.json())
+  app.use('/api/whatsapp-pi', createWhatsappPIRouter({
+    fetch: async () => {
+      fetchCalls += 1
+      throw new Error('Media capture must not call Meta or media download APIs.')
+    },
+    pool,
+    tableNames: {},
+  }))
+
+  const server = app.listen(0)
+  await new Promise((resolve) => server.once('listening', resolve))
+  t.after(() => server.close())
+
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+  const payload = {
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              contacts: [
+                {
+                  profile: { name: 'Media Customer' },
+                  wa_id: '917733850017',
+                },
+              ],
+              messages: [
+                {
+                  from: '917733850017',
+                  id: 'wamid.media-image-1',
+                  image: {
+                    caption: 'Please check this image',
+                    id: 'meta-image-id-1',
+                    mime_type: 'image/jpeg',
+                    sha256: 'image-sha',
+                  },
+                  timestamp: '1785997800',
+                  type: 'image',
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  }
+
+  const response = await fetch(`http://127.0.0.1:${port}/api/whatsapp-pi/webhook`, {
+    body: JSON.stringify(payload),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  const body = await response.json()
+  const duplicateResponse = await fetch(`http://127.0.0.1:${port}/api/whatsapp-pi/webhook`, {
+    body: JSON.stringify(payload),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  const duplicateBody = await duplicateResponse.json()
+  const row = pool.state.messageRows[0]
+
+  assert.equal(response.status, 200)
+  assert.equal(body.ok, true)
+  assert.equal(body.parse_status, 'MEDIA_RECEIVED')
+  assert.equal(body.pi_created, false)
+  assert.equal(duplicateResponse.status, 200)
+  assert.equal(duplicateBody.ok, true)
+  assert.equal(duplicateBody.duplicate, true)
+  assert.equal(duplicateBody.saved, 1)
+  assert.equal(duplicateBody.inserted, false)
+  assert.equal(duplicateBody.parse_status, 'MEDIA_RECEIVED')
+  assert.equal(duplicateBody.pi_created, false)
+  assert.equal(pool.state.messageRows.length, 1)
+  assert.equal(pool.state.captureUpdates, 1)
+  assert.equal(pool.state.piCreationAttempts, 0)
+  assert.equal(row.message_type, 'image')
+  assert.equal(row.media_id, 'meta-image-id-1')
+  assert.equal(row.media_type, 'image')
+  assert.equal(row.media_mime_type, 'image/jpeg')
+  assert.equal(row.media_sha256, 'image-sha')
+  assert.equal(row.caption, 'Please check this image')
+  assert.equal(row.processing_status, 'MEDIA_RECEIVED')
+  assert.equal(row.media_capture_status, 'CAPTURED')
+  assert.equal(row.pi_created, false)
+  assert.equal(row.raw_payload.message.id, 'wamid.media-image-1')
+  assert.equal(fetchCalls, 0)
+})
+
+test('live webhook captures PDF media and ignores duplicate replay', async (t) => {
+  const pool = createMediaCapturePool()
+  let fetchCalls = 0
+  const app = express()
+
+  app.use(express.json())
+  app.use('/api/whatsapp-pi', createWhatsappPIRouter({
+    fetch: async () => {
+      fetchCalls += 1
+      throw new Error('Media capture must not call Meta or media download APIs.')
+    },
+    pool,
+    tableNames: {},
+  }))
+
+  const server = app.listen(0)
+  await new Promise((resolve) => server.once('listening', resolve))
+  t.after(() => server.close())
+
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+  const payload = {
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              contacts: [
+                {
+                  profile: { name: 'PDF Customer' },
+                  wa_id: '917733850017',
+                },
+              ],
+              messages: [
+                {
+                  document: {
+                    caption: 'Order PDF attached',
+                    filename: 'order.pdf',
+                    id: 'meta-pdf-id-1',
+                    mime_type: 'application/pdf',
+                    sha256: 'pdf-sha',
+                  },
+                  from: '917733850017',
+                  id: 'wamid.media-pdf-1',
+                  timestamp: '1785997801',
+                  type: 'document',
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  }
+
+  const response = await fetch(`http://127.0.0.1:${port}/api/whatsapp-pi/webhook`, {
+    body: JSON.stringify(payload),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  const body = await response.json()
+  const duplicateResponse = await fetch(`http://127.0.0.1:${port}/api/whatsapp-pi/webhook`, {
+    body: JSON.stringify(payload),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  const duplicateBody = await duplicateResponse.json()
+  const row = pool.state.messageRows[0]
+
+  assert.equal(response.status, 200)
+  assert.equal(body.ok, true)
+  assert.equal(body.parse_status, 'MEDIA_RECEIVED')
+  assert.equal(body.pi_created, false)
+  assert.equal(duplicateResponse.status, 200)
+  assert.equal(duplicateBody.ok, true)
+  assert.equal(duplicateBody.duplicate, true)
+  assert.equal(duplicateBody.inserted, false)
+  assert.equal(duplicateBody.parse_status, 'MEDIA_RECEIVED')
+  assert.equal(pool.state.messageRows.length, 1)
+  assert.equal(pool.state.captureUpdates, 1)
+  assert.equal(pool.state.piCreationAttempts, 0)
+  assert.equal(row.message_type, 'document')
+  assert.equal(row.media_id, 'meta-pdf-id-1')
+  assert.equal(row.media_type, 'document')
+  assert.equal(row.media_mime_type, 'application/pdf')
+  assert.equal(row.media_sha256, 'pdf-sha')
+  assert.equal(row.file_name, 'order.pdf')
+  assert.equal(row.caption, 'Order PDF attached')
+  assert.equal(row.processing_status, 'MEDIA_RECEIVED')
+  assert.equal(row.media_capture_status, 'CAPTURED')
+  assert.equal(row.pi_created, false)
+  assert.equal(row.raw_payload.message.id, 'wamid.media-pdf-1')
+  assert.equal(fetchCalls, 0)
 })

@@ -38,6 +38,11 @@ import {
 import {
   runPhase1Verification,
 } from './phase1VerificationService.js'
+import {
+  buildMetaStyleMediaMessage,
+  classifyMediaMessage,
+  extractMediaEnvelope,
+} from './whatsappMediaCaptureService.js'
 
 const TEST_RUN_TABLE_NAME = 'tran_ai_communication_test_runs'
 const MAX_INPUT_SUMMARY_LENGTH = 500
@@ -1385,6 +1390,74 @@ export const createAITestConsoleRouter = (dependencies) => {
           }
         },
         testType: 'system-check',
+      })
+
+      response.json(result)
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.post('/media-capture', async (request, response, next) => {
+    try {
+      const result = await runConsoleTest(dependencies, request, {
+        execute: async () => {
+          const messageType = toText(request.body.messageType || request.body.mediaType || 'image')
+          const senderPhone = toText(request.body.senderPhone) || '917733850017'
+          const senderName = toText(request.body.senderName) || 'Media Test Customer'
+          const message = buildMetaStyleMediaMessage({
+            animated: toBoolean(request.body.animated),
+            caption: toText(request.body.caption),
+            fileName: toText(request.body.fileName),
+            mediaId: toText(request.body.mediaId) || `test-${messageType}-media-id`,
+            mediaMimeType: toText(request.body.mimeType || request.body.mediaMimeType),
+            mediaSha256: toText(request.body.sha256 || request.body.mediaSha256),
+            messageId: toText(request.body.messageId) || `wamid.test-${messageType}-${Date.now()}`,
+            messageType,
+            senderPhone,
+            voice: toBoolean(request.body.voice),
+          })
+          const contact = {
+            profile: { name: senderName },
+            wa_id: senderPhone,
+          }
+          const envelope = extractMediaEnvelope(message, contact)
+          const classification = classifyMediaMessage(envelope)
+          const trafficLight = classification.captureStatus === 'CAPTURED'
+            ? 'GREEN'
+            : classification.captureStatus === 'PARTIAL'
+              ? 'YELLOW'
+              : 'RED'
+
+          return {
+            animated: envelope.animated,
+            caption: envelope.caption,
+            databaseChanged: false,
+            databaseRowId: null,
+            detectedMessageType: envelope.messageType,
+            downloadAttempted: false,
+            duplicate: false,
+            errors: classification.errors,
+            fileName: envelope.fileName,
+            finalStatus: classification.captureStatus,
+            mediaCaptureStatus: classification.captureStatus,
+            mediaId: envelope.mediaId,
+            mediaMimeType: envelope.mediaMimeType,
+            mediaSha256: envelope.mediaSha256,
+            mediaType: envelope.mediaType,
+            metaApiCalled: false,
+            mode: 'simulation',
+            ocrAttempted: false,
+            piCreated: false,
+            processingStatus: classification.processingStatus,
+            senderName,
+            senderPhone,
+            trafficLight,
+            voice: envelope.voice,
+            warnings: classification.warnings,
+          }
+        },
+        testType: 'media-capture',
       })
 
       response.json(result)
