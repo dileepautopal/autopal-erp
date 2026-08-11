@@ -28,6 +28,7 @@
     "test:whatsapp-ack": "node --test backend/whatsappAckService.test.js",
     "test:whatsapp-media-download": "node --test backend/whatsappMediaDownloadService.test.js",
     "test:whatsapp-media-extraction": "node --test backend/whatsappMediaTextExtractionService.test.js",
+    "test:whatsapp-media-order-candidate": "node --test backend/whatsappMediaOrderCandidateService.test.js",
     "test:whatsapp-send": "node --test backend/whatsappSendService.test.js",
     "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
     "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",

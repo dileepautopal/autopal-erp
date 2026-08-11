@@ -56,6 +56,12 @@ import {
   getSafeMediaExtractionLogDetails,
   MEDIA_EXTRACTION_STATUSES,
 } from './whatsappMediaTextExtractionService.js'
+import {
+  ensureWhatsAppMediaOrderCandidateSchema,
+  getSafeMediaOrderParseLogDetails,
+  MEDIA_ORDER_PARSE_STATUSES,
+  parseExtractedWhatsAppMediaOrderCandidate,
+} from './whatsappMediaOrderCandidateService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1283,6 +1289,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           media_extracted_at timestamptz,
           media_extraction_error text,
           media_extraction_method varchar(50),
+          media_order_parse_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          media_order_candidate jsonb,
+          media_order_parsed_at timestamptz,
+          media_order_parse_error text,
           media_path text,
           file_name text,
           caption text,
@@ -1332,6 +1342,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS media_extracted_at timestamptz,
           ADD COLUMN IF NOT EXISTS media_extraction_error text,
           ADD COLUMN IF NOT EXISTS media_extraction_method varchar(50),
+          ADD COLUMN IF NOT EXISTS media_order_parse_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS media_order_candidate jsonb,
+          ADD COLUMN IF NOT EXISTS media_order_parsed_at timestamptz,
+          ADD COLUMN IF NOT EXISTS media_order_parse_error text,
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1411,6 +1425,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       await ensureWhatsAppMediaCaptureSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMediaDownloadSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMediaTextExtractionSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppMediaOrderCandidateSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -1569,6 +1584,10 @@ const mapIncomingWhatsappMessageRow = (row) => ({
   mediaExtractedAt: row.media_extracted_at ?? null,
   mediaExtractionError: row.media_extraction_error ?? '',
   mediaExtractionMethod: row.media_extraction_method ?? '',
+  mediaOrderParseStatus: row.media_order_parse_status ?? 'PENDING',
+  mediaOrderCandidate: row.media_order_candidate ?? null,
+  mediaOrderParsedAt: row.media_order_parsed_at ?? null,
+  mediaOrderParseError: row.media_order_parse_error ?? '',
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
@@ -1634,6 +1653,10 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         media_extracted_at,
         media_extraction_error,
         media_extraction_method,
+        media_order_parse_status,
+        media_order_candidate,
+        media_order_parsed_at,
+        media_order_parse_error,
         media_path,
         file_name,
         caption,
@@ -1710,6 +1733,10 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
         media_extracted_at,
         media_extraction_error,
         media_extraction_method,
+        media_order_parse_status,
+        media_order_candidate,
+        media_order_parsed_at,
+        media_order_parse_error,
         media_path,
         file_name,
         caption,
@@ -2030,6 +2057,10 @@ const saveIncomingWhatsappMessage = async (
         media_extracted_at,
         media_extraction_error,
         media_extraction_method,
+        media_order_parse_status,
+        media_order_candidate,
+        media_order_parsed_at,
+        media_order_parse_error,
         media_path,
         file_name,
         caption,
@@ -2124,6 +2155,10 @@ const saveIncomingWhatsappMessage = async (
         media_extracted_at,
         media_extraction_error,
         media_extraction_method,
+        media_order_parse_status,
+        media_order_candidate,
+        media_order_parsed_at,
+        media_order_parse_error,
         media_path,
         file_name,
         caption,
@@ -2255,6 +2290,10 @@ const updateIncomingWhatsappMessageProcessing = async (
         media_extracted_at,
         media_extraction_error,
         media_extraction_method,
+        media_order_parse_status,
+        media_order_candidate,
+        media_order_parsed_at,
+        media_order_parse_error,
         media_path,
         file_name,
         caption,
@@ -2800,7 +2839,46 @@ const extractDownloadedWhatsappMediaMessage = async (
     logWhatsappWebhook('whatsapp_media_extraction_failed', safeDetails)
   }
 
+  if (extractionResult.status === MEDIA_EXTRACTION_STATUSES.EXTRACTED) {
+    await parseExtractedWhatsappMediaOrderCandidate(dependencies, { messageId }).catch((error) => {
+      logWhatsappWebhook('whatsapp_media_order_parse_failed', {
+        error: error instanceof Error ? error.message : String(error),
+        messageId,
+      })
+    })
+  }
+
   return extractionResult
+}
+
+const parseExtractedWhatsappMediaOrderCandidate = async (
+  dependencies,
+  {
+    messageId,
+  } = {},
+) => {
+  logWhatsappWebhook('whatsapp_media_order_parse_started', { messageId })
+
+  const parseResult = await parseExtractedWhatsAppMediaOrderCandidate({
+    messageId,
+    pool: dependencies.pool,
+    tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+  })
+  const safeDetails = getSafeMediaOrderParseLogDetails(parseResult)
+
+  if (parseResult.skipped) {
+    logWhatsappWebhook('whatsapp_media_order_parse_skipped', safeDetails)
+  } else if (parseResult.status === MEDIA_ORDER_PARSE_STATUSES.PARSED) {
+    logWhatsappWebhook('whatsapp_media_order_parse_completed', safeDetails)
+  } else if (parseResult.status === MEDIA_ORDER_PARSE_STATUSES.PARSE_PARTIAL) {
+    logWhatsappWebhook('whatsapp_media_order_parse_partial', safeDetails)
+  } else if (parseResult.status === MEDIA_ORDER_PARSE_STATUSES.NO_ORDER_LINES) {
+    logWhatsappWebhook('whatsapp_media_order_parse_no_lines', safeDetails)
+  } else {
+    logWhatsappWebhook('whatsapp_media_order_parse_failed', safeDetails)
+  }
+
+  return parseResult
 }
 
 const scheduleWhatsappMediaDownload = (
