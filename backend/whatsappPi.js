@@ -50,6 +50,12 @@ import {
   ensureWhatsAppMediaDownloadSchema,
   getSafeMediaDownloadLogDetails,
 } from './whatsappMediaDownloadService.js'
+import {
+  ensureWhatsAppMediaTextExtractionSchema,
+  extractDownloadedWhatsAppMediaText,
+  getSafeMediaExtractionLogDetails,
+  MEDIA_EXTRACTION_STATUSES,
+} from './whatsappMediaTextExtractionService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1272,6 +1278,11 @@ const ensureWhatsappMessageSchema = async (pool) => {
           media_download_error text,
           media_file_size bigint,
           media_download_sha256 varchar(128),
+          media_extraction_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          media_extracted_text text,
+          media_extracted_at timestamptz,
+          media_extraction_error text,
+          media_extraction_method varchar(50),
           media_path text,
           file_name text,
           caption text,
@@ -1316,6 +1327,11 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS media_download_error text,
           ADD COLUMN IF NOT EXISTS media_file_size bigint,
           ADD COLUMN IF NOT EXISTS media_download_sha256 varchar(128),
+          ADD COLUMN IF NOT EXISTS media_extraction_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS media_extracted_text text,
+          ADD COLUMN IF NOT EXISTS media_extracted_at timestamptz,
+          ADD COLUMN IF NOT EXISTS media_extraction_error text,
+          ADD COLUMN IF NOT EXISTS media_extraction_method varchar(50),
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1394,6 +1410,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       `)
       await ensureWhatsAppMediaCaptureSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMediaDownloadSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppMediaTextExtractionSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -1547,6 +1564,11 @@ const mapIncomingWhatsappMessageRow = (row) => ({
     ? null
     : Number(row.media_file_size),
   mediaDownloadSha256: row.media_download_sha256 ?? '',
+  mediaExtractionStatus: row.media_extraction_status ?? 'PENDING',
+  mediaExtractedText: row.media_extracted_text ?? '',
+  mediaExtractedAt: row.media_extracted_at ?? null,
+  mediaExtractionError: row.media_extraction_error ?? '',
+  mediaExtractionMethod: row.media_extraction_method ?? '',
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
@@ -1607,6 +1629,11 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         media_download_error,
         media_file_size,
         media_download_sha256,
+        media_extraction_status,
+        media_extracted_text,
+        media_extracted_at,
+        media_extraction_error,
+        media_extraction_method,
         media_path,
         file_name,
         caption,
@@ -1678,6 +1705,11 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
         media_download_error,
         media_file_size,
         media_download_sha256,
+        media_extraction_status,
+        media_extracted_text,
+        media_extracted_at,
+        media_extraction_error,
+        media_extraction_method,
         media_path,
         file_name,
         caption,
@@ -1993,6 +2025,11 @@ const saveIncomingWhatsappMessage = async (
         media_download_error,
         media_file_size,
         media_download_sha256,
+        media_extraction_status,
+        media_extracted_text,
+        media_extracted_at,
+        media_extraction_error,
+        media_extraction_method,
         media_path,
         file_name,
         caption,
@@ -2082,6 +2119,11 @@ const saveIncomingWhatsappMessage = async (
         media_download_error,
         media_file_size,
         media_download_sha256,
+        media_extraction_status,
+        media_extracted_text,
+        media_extracted_at,
+        media_extraction_error,
+        media_extraction_method,
         media_path,
         file_name,
         caption,
@@ -2208,6 +2250,11 @@ const updateIncomingWhatsappMessageProcessing = async (
         media_download_error,
         media_file_size,
         media_download_sha256,
+        media_extraction_status,
+        media_extracted_text,
+        media_extracted_at,
+        media_extraction_error,
+        media_extraction_method,
         media_path,
         file_name,
         caption,
@@ -2713,7 +2760,47 @@ const downloadCapturedWhatsappMediaMessage = async (
     logWhatsappWebhook('whatsapp_media_download_failed', safeDetails)
   }
 
+  if (downloadResult.status === 'DOWNLOADED') {
+    await extractDownloadedWhatsappMediaMessage(dependencies, { messageId }).catch((error) => {
+      logWhatsappWebhook('whatsapp_media_extraction_failed', {
+        error: error instanceof Error ? error.message : String(error),
+        messageId,
+      })
+    })
+  }
+
   return downloadResult
+}
+
+const extractDownloadedWhatsappMediaMessage = async (
+  dependencies,
+  {
+    messageId,
+  } = {},
+) => {
+  logWhatsappWebhook('whatsapp_media_extraction_started', {
+    messageId,
+  })
+
+  const extractionResult = await extractDownloadedWhatsAppMediaText({
+    env: process.env,
+    messageId,
+    pool: dependencies.pool,
+    tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+  })
+  const safeDetails = getSafeMediaExtractionLogDetails(extractionResult)
+
+  if (extractionResult.skipped) {
+    logWhatsappWebhook('whatsapp_media_extraction_skipped_existing', safeDetails)
+  } else if (extractionResult.status === MEDIA_EXTRACTION_STATUSES.EXTRACTED) {
+    logWhatsappWebhook('whatsapp_media_extraction_completed', safeDetails)
+  } else if (extractionResult.status === MEDIA_EXTRACTION_STATUSES.EXTRACTION_NOT_SUPPORTED) {
+    logWhatsappWebhook('whatsapp_media_extraction_not_supported', safeDetails)
+  } else {
+    logWhatsappWebhook('whatsapp_media_extraction_failed', safeDetails)
+  }
+
+  return extractionResult
 }
 
 const scheduleWhatsappMediaDownload = (
