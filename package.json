@@ -30,6 +30,7 @@
     "test:whatsapp-media-extraction": "node --test backend/whatsappMediaTextExtractionService.test.js",
     "test:whatsapp-media-order-candidate": "node --test backend/whatsappMediaOrderCandidateService.test.js",
     "test:whatsapp-excel-processing": "node --test backend/whatsappExcelProcessingService.test.js",
+    "test:whatsapp-word-processing": "node --test backend/whatsappWordProcessingService.test.js",
     "test:whatsapp-send": "node --test backend/whatsappSendService.test.js",
     "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
     "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",
@@ -41,8 +42,10 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@xmldom/xmldom": "^0.8.13",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
+    "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
     "pdf-parse": "^2.4.5",
     "pg": "^8.21.0",
