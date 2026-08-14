@@ -29,6 +29,7 @@
     "test:whatsapp-media-download": "node --test backend/whatsappMediaDownloadService.test.js",
     "test:whatsapp-media-extraction": "node --test backend/whatsappMediaTextExtractionService.test.js",
     "test:whatsapp-media-order-candidate": "node --test backend/whatsappMediaOrderCandidateService.test.js",
+    "test:whatsapp-excel-processing": "node --test backend/whatsappExcelProcessingService.test.js",
     "test:whatsapp-send": "node --test backend/whatsappSendService.test.js",
     "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
     "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",
@@ -49,7 +50,8 @@
     "react-dom": "^19.2.6",
     "read-excel-file": "^9.3.4",
     "sharp": "^0.35.3",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -62,6 +62,13 @@ import {
   MEDIA_ORDER_PARSE_STATUSES,
   parseExtractedWhatsAppMediaOrderCandidate,
 } from './whatsappMediaOrderCandidateService.js'
+import {
+  ensureWhatsAppExcelProcessingSchema,
+  getSafeExcelProcessingLogDetails,
+  isSupportedExcelMedia,
+  MEDIA_EXCEL_STATUSES,
+  processDownloadedWhatsAppExcel,
+} from './whatsappExcelProcessingService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1293,6 +1300,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           media_order_candidate jsonb,
           media_order_parsed_at timestamptz,
           media_order_parse_error text,
+          media_excel_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          media_excel_candidate jsonb,
+          media_excel_processed_at timestamptz,
+          media_excel_error text,
           media_path text,
           file_name text,
           caption text,
@@ -1346,6 +1357,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS media_order_candidate jsonb,
           ADD COLUMN IF NOT EXISTS media_order_parsed_at timestamptz,
           ADD COLUMN IF NOT EXISTS media_order_parse_error text,
+          ADD COLUMN IF NOT EXISTS media_excel_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS media_excel_candidate jsonb,
+          ADD COLUMN IF NOT EXISTS media_excel_processed_at timestamptz,
+          ADD COLUMN IF NOT EXISTS media_excel_error text,
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1426,6 +1441,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       await ensureWhatsAppMediaDownloadSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMediaTextExtractionSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMediaOrderCandidateSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppExcelProcessingSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -1588,6 +1604,10 @@ const mapIncomingWhatsappMessageRow = (row) => ({
   mediaOrderCandidate: row.media_order_candidate ?? null,
   mediaOrderParsedAt: row.media_order_parsed_at ?? null,
   mediaOrderParseError: row.media_order_parse_error ?? '',
+  mediaExcelStatus: row.media_excel_status ?? 'PENDING',
+  mediaExcelCandidate: row.media_excel_candidate ?? null,
+  mediaExcelProcessedAt: row.media_excel_processed_at ?? null,
+  mediaExcelError: row.media_excel_error ?? '',
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
@@ -1657,6 +1677,10 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         media_order_candidate,
         media_order_parsed_at,
         media_order_parse_error,
+        media_excel_status,
+        media_excel_candidate,
+        media_excel_processed_at,
+        media_excel_error,
         media_path,
         file_name,
         caption,
@@ -1737,6 +1761,10 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
         media_order_candidate,
         media_order_parsed_at,
         media_order_parse_error,
+        media_excel_status,
+        media_excel_candidate,
+        media_excel_processed_at,
+        media_excel_error,
         media_path,
         file_name,
         caption,
@@ -2061,6 +2089,10 @@ const saveIncomingWhatsappMessage = async (
         media_order_candidate,
         media_order_parsed_at,
         media_order_parse_error,
+        media_excel_status,
+        media_excel_candidate,
+        media_excel_processed_at,
+        media_excel_error,
         media_path,
         file_name,
         caption,
@@ -2159,6 +2191,10 @@ const saveIncomingWhatsappMessage = async (
         media_order_candidate,
         media_order_parsed_at,
         media_order_parse_error,
+        media_excel_status,
+        media_excel_candidate,
+        media_excel_processed_at,
+        media_excel_error,
         media_path,
         file_name,
         caption,
@@ -2294,6 +2330,10 @@ const updateIncomingWhatsappMessageProcessing = async (
         media_order_candidate,
         media_order_parsed_at,
         media_order_parse_error,
+        media_excel_status,
+        media_excel_candidate,
+        media_excel_processed_at,
+        media_excel_error,
         media_path,
         file_name,
         caption,
@@ -2800,15 +2840,62 @@ const downloadCapturedWhatsappMediaMessage = async (
   }
 
   if (downloadResult.status === 'DOWNLOADED') {
-    await extractDownloadedWhatsappMediaMessage(dependencies, { messageId }).catch((error) => {
-      logWhatsappWebhook('whatsapp_media_extraction_failed', {
-        error: error instanceof Error ? error.message : String(error),
-        messageId,
+    if (isSupportedExcelMedia({
+      mediaPath: downloadResult.mediaPath,
+      mimeType: downloadResult.mimeType,
+    })) {
+      await processDownloadedWhatsappExcelMessage(dependencies, { messageId }).catch((error) => {
+        logWhatsappWebhook('whatsapp_excel_processing_failed', {
+          error: error instanceof Error ? error.message : String(error),
+          messageId,
+        })
       })
-    })
+    } else {
+      await extractDownloadedWhatsappMediaMessage(dependencies, { messageId }).catch((error) => {
+        logWhatsappWebhook('whatsapp_media_extraction_failed', {
+          error: error instanceof Error ? error.message : String(error),
+          messageId,
+        })
+      })
+    }
   }
 
   return downloadResult
+}
+
+const processDownloadedWhatsappExcelMessage = async (
+  dependencies,
+  {
+    messageId,
+  } = {},
+) => {
+  logWhatsappWebhook('whatsapp_excel_processing_started', { messageId })
+
+  const processingResult = await processDownloadedWhatsAppExcel({
+    env: process.env,
+    messageId,
+    pool: dependencies.pool,
+    tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+  })
+  const safeDetails = getSafeExcelProcessingLogDetails(processingResult)
+
+  if (processingResult.skipped) {
+    logWhatsappWebhook('whatsapp_excel_processing_skipped_existing', safeDetails)
+  } else if (processingResult.status === MEDIA_EXCEL_STATUSES.EXCEL_PARSED) {
+    logWhatsappWebhook('whatsapp_excel_processing_completed', safeDetails)
+  } else if (processingResult.status === MEDIA_EXCEL_STATUSES.EXCEL_PARTIAL) {
+    logWhatsappWebhook('whatsapp_excel_processing_partial', safeDetails)
+  } else if (processingResult.status === MEDIA_EXCEL_STATUSES.EXCEL_AMBIGUOUS) {
+    logWhatsappWebhook('whatsapp_excel_processing_ambiguous', safeDetails)
+  } else if (processingResult.status === MEDIA_EXCEL_STATUSES.EXCEL_NO_ORDER_LINES) {
+    logWhatsappWebhook('whatsapp_excel_processing_no_lines', safeDetails)
+  } else if (processingResult.status === MEDIA_EXCEL_STATUSES.EXCEL_UNSUPPORTED) {
+    logWhatsappWebhook('whatsapp_excel_processing_unsupported', safeDetails)
+  } else {
+    logWhatsappWebhook('whatsapp_excel_processing_failed', safeDetails)
+  }
+
+  return processingResult
 }
 
 const extractDownloadedWhatsappMediaMessage = async (
