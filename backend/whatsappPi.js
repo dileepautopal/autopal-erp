@@ -82,6 +82,12 @@ import {
   MIXED_MESSAGE_STATUSES,
   processWhatsAppMixedMessageContext,
 } from './whatsappMixedMessageContextService.js'
+import {
+  ensureWhatsAppUnifiedOrderInputSchema,
+  getSafeUnifiedOrderLogDetails,
+  processWhatsAppUnifiedOrderInput,
+  UNIFIED_ORDER_STATUSES,
+} from './whatsappUnifiedOrderInputService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1325,6 +1331,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           media_mixed_context jsonb,
           media_mixed_processed_at timestamptz,
           media_mixed_error text,
+          unified_order_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          unified_order_input jsonb,
+          unified_order_processed_at timestamptz,
+          unified_order_error text,
           media_path text,
           file_name text,
           caption text,
@@ -1390,6 +1400,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS media_mixed_context jsonb,
           ADD COLUMN IF NOT EXISTS media_mixed_processed_at timestamptz,
           ADD COLUMN IF NOT EXISTS media_mixed_error text,
+          ADD COLUMN IF NOT EXISTS unified_order_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS unified_order_input jsonb,
+          ADD COLUMN IF NOT EXISTS unified_order_processed_at timestamptz,
+          ADD COLUMN IF NOT EXISTS unified_order_error text,
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1473,6 +1487,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       await ensureWhatsAppExcelProcessingSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppWordProcessingSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMixedMessageContextSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppUnifiedOrderInputSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -1647,6 +1662,10 @@ const mapIncomingWhatsappMessageRow = (row) => ({
   mediaMixedContext: row.media_mixed_context ?? null,
   mediaMixedProcessedAt: row.media_mixed_processed_at ?? null,
   mediaMixedError: row.media_mixed_error ?? '',
+  unifiedOrderStatus: row.unified_order_status ?? 'PENDING',
+  unifiedOrderInput: row.unified_order_input ?? null,
+  unifiedOrderProcessedAt: row.unified_order_processed_at ?? null,
+  unifiedOrderError: row.unified_order_error ?? '',
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
@@ -1728,6 +1747,10 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         media_mixed_context,
         media_mixed_processed_at,
         media_mixed_error,
+        unified_order_status,
+        unified_order_input,
+        unified_order_processed_at,
+        unified_order_error,
         media_path,
         file_name,
         caption,
@@ -1820,6 +1843,10 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
         media_mixed_context,
         media_mixed_processed_at,
         media_mixed_error,
+        unified_order_status,
+        unified_order_input,
+        unified_order_processed_at,
+        unified_order_error,
         media_path,
         file_name,
         caption,
@@ -2156,6 +2183,10 @@ const saveIncomingWhatsappMessage = async (
         media_mixed_context,
         media_mixed_processed_at,
         media_mixed_error,
+        unified_order_status,
+        unified_order_input,
+        unified_order_processed_at,
+        unified_order_error,
         media_path,
         file_name,
         caption,
@@ -2266,6 +2297,10 @@ const saveIncomingWhatsappMessage = async (
         media_mixed_context,
         media_mixed_processed_at,
         media_mixed_error,
+        unified_order_status,
+        unified_order_input,
+        unified_order_processed_at,
+        unified_order_error,
         media_path,
         file_name,
         caption,
@@ -2413,6 +2448,10 @@ const updateIncomingWhatsappMessageProcessing = async (
         media_mixed_context,
         media_mixed_processed_at,
         media_mixed_error,
+        unified_order_status,
+        unified_order_input,
+        unified_order_processed_at,
+        unified_order_error,
         media_path,
         file_name,
         caption,
@@ -2930,6 +2969,45 @@ const processWhatsappMixedContext = async (dependencies, { messageId } = {}) => 
   }
 }
 
+const processWhatsappUnifiedOrder = async (dependencies, { messageId } = {}) => {
+  const startedAt = Date.now()
+  logWhatsappWebhook('whatsapp_unified_order_started', { messageId })
+
+  try {
+    const result = await processWhatsAppUnifiedOrderInput({
+      messageId,
+      pool: dependencies.pool,
+      tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+    })
+    const details = {
+      ...getSafeUnifiedOrderLogDetails(result),
+      durationMs: Date.now() - startedAt,
+      senderPhone: result.input?.sender ?? '',
+    }
+    const event = result.duplicate
+      ? 'whatsapp_unified_order_skipped_existing'
+      : result.status === UNIFIED_ORDER_STATUSES.UNIFIED_READY
+        ? 'whatsapp_unified_order_ready'
+        : result.status === UNIFIED_ORDER_STATUSES.UNIFIED_PARTIAL
+          ? 'whatsapp_unified_order_partial'
+          : result.status === UNIFIED_ORDER_STATUSES.UNIFIED_AMBIGUOUS
+            ? 'whatsapp_unified_order_ambiguous'
+            : result.status === UNIFIED_ORDER_STATUSES.UNIFIED_NO_INPUT
+              ? 'whatsapp_unified_order_no_input'
+              : 'whatsapp_unified_order_failed'
+    logWhatsappWebhook(event, details)
+    return result
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : String(error)
+    logWhatsappWebhook('whatsapp_unified_order_failed', {
+      durationMs: Date.now() - startedAt,
+      error: safeError,
+      messageId,
+    })
+    return { error: safeError, messageId, status: UNIFIED_ORDER_STATUSES.UNIFIED_FAILED }
+  }
+}
+
 const downloadCapturedWhatsappMediaMessage = async (
   dependencies,
   {
@@ -3023,8 +3101,19 @@ const processDownloadedWhatsappExcelMessage = async (
     logWhatsappWebhook('whatsapp_excel_processing_failed', safeDetails)
   }
 
-  if ([MEDIA_EXCEL_STATUSES.EXCEL_PARSED, MEDIA_EXCEL_STATUSES.EXCEL_PARTIAL].includes(processingResult.status)) {
+  if ([
+    MEDIA_EXCEL_STATUSES.EXCEL_PARSED,
+    MEDIA_EXCEL_STATUSES.EXCEL_PARTIAL,
+  ].includes(processingResult.status)) {
     await processWhatsappMixedContext(dependencies, { messageId })
+  }
+  if ([
+    MEDIA_EXCEL_STATUSES.EXCEL_PARSED,
+    MEDIA_EXCEL_STATUSES.EXCEL_PARTIAL,
+    MEDIA_EXCEL_STATUSES.EXCEL_AMBIGUOUS,
+    MEDIA_EXCEL_STATUSES.EXCEL_NO_ORDER_LINES,
+  ].includes(processingResult.status)) {
+    await processWhatsappUnifiedOrder(dependencies, { messageId })
   }
 
   return processingResult
@@ -3064,6 +3153,14 @@ const processDownloadedWhatsappWordMessage = async (
 
   if ([MEDIA_WORD_STATUSES.WORD_PARSED, MEDIA_WORD_STATUSES.WORD_PARTIAL].includes(processingResult.status)) {
     await processWhatsappMixedContext(dependencies, { messageId })
+  }
+  if ([
+    MEDIA_WORD_STATUSES.WORD_PARSED,
+    MEDIA_WORD_STATUSES.WORD_PARTIAL,
+    MEDIA_WORD_STATUSES.WORD_AMBIGUOUS,
+    MEDIA_WORD_STATUSES.WORD_NO_ORDER_LINES,
+  ].includes(processingResult.status)) {
+    await processWhatsappUnifiedOrder(dependencies, { messageId })
   }
 
   return processingResult
@@ -3138,6 +3235,13 @@ const parseExtractedWhatsappMediaOrderCandidate = async (
 
   if ([MEDIA_ORDER_PARSE_STATUSES.PARSED, MEDIA_ORDER_PARSE_STATUSES.PARSE_PARTIAL].includes(parseResult.status)) {
     await processWhatsappMixedContext(dependencies, { messageId })
+  }
+  if ([
+    MEDIA_ORDER_PARSE_STATUSES.PARSED,
+    MEDIA_ORDER_PARSE_STATUSES.PARSE_PARTIAL,
+    MEDIA_ORDER_PARSE_STATUSES.NO_ORDER_LINES,
+  ].includes(parseResult.status)) {
+    await processWhatsappUnifiedOrder(dependencies, { messageId })
   }
 
   return parseResult
@@ -4474,6 +4578,16 @@ export const createWhatsappPIRouter = (dependencies) => {
         const mixedContextResult = await processWhatsappMixedContext(dependencies, {
           messageId: messageSource.messageId,
         })
+
+        if ([
+          MIXED_MESSAGE_STATUSES.MIXED_GROUPED,
+          MIXED_MESSAGE_STATUSES.MIXED_PARTIAL,
+          MIXED_MESSAGE_STATUSES.MIXED_AMBIGUOUS,
+        ].includes(mixedContextResult.status)) {
+          await processWhatsappUnifiedOrder(dependencies, {
+            messageId: messageSource.messageId,
+          })
+        }
 
         if ([
           MIXED_MESSAGE_STATUSES.MIXED_GROUPED,
