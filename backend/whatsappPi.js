@@ -76,6 +76,12 @@ import {
   MEDIA_WORD_STATUSES,
   processDownloadedWhatsAppWord,
 } from './whatsappWordProcessingService.js'
+import {
+  ensureWhatsAppMixedMessageContextSchema,
+  getSafeMixedMessageLogDetails,
+  MIXED_MESSAGE_STATUSES,
+  processWhatsAppMixedMessageContext,
+} from './whatsappMixedMessageContextService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1315,6 +1321,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           media_word_candidate jsonb,
           media_word_processed_at timestamptz,
           media_word_error text,
+          media_mixed_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          media_mixed_context jsonb,
+          media_mixed_processed_at timestamptz,
+          media_mixed_error text,
           media_path text,
           file_name text,
           caption text,
@@ -1376,6 +1386,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS media_word_candidate jsonb,
           ADD COLUMN IF NOT EXISTS media_word_processed_at timestamptz,
           ADD COLUMN IF NOT EXISTS media_word_error text,
+          ADD COLUMN IF NOT EXISTS media_mixed_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS media_mixed_context jsonb,
+          ADD COLUMN IF NOT EXISTS media_mixed_processed_at timestamptz,
+          ADD COLUMN IF NOT EXISTS media_mixed_error text,
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1458,6 +1472,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       await ensureWhatsAppMediaOrderCandidateSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppExcelProcessingSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppWordProcessingSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppMixedMessageContextSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -1628,6 +1643,10 @@ const mapIncomingWhatsappMessageRow = (row) => ({
   mediaWordCandidate: row.media_word_candidate ?? null,
   mediaWordProcessedAt: row.media_word_processed_at ?? null,
   mediaWordError: row.media_word_error ?? '',
+  mediaMixedStatus: row.media_mixed_status ?? 'PENDING',
+  mediaMixedContext: row.media_mixed_context ?? null,
+  mediaMixedProcessedAt: row.media_mixed_processed_at ?? null,
+  mediaMixedError: row.media_mixed_error ?? '',
   messageId: row.message_id ?? '',
   messageText: row.message_text ?? '',
   messageType: row.message_type ?? '',
@@ -1705,6 +1724,10 @@ const getIncomingWhatsappMessages = async (dependencies, requestedLimit = 10) =>
         media_word_candidate,
         media_word_processed_at,
         media_word_error,
+        media_mixed_status,
+        media_mixed_context,
+        media_mixed_processed_at,
+        media_mixed_error,
         media_path,
         file_name,
         caption,
@@ -1793,6 +1816,10 @@ const getIncomingWhatsappMessageByMessageId = async (dependencies, messageId) =>
         media_word_candidate,
         media_word_processed_at,
         media_word_error,
+        media_mixed_status,
+        media_mixed_context,
+        media_mixed_processed_at,
+        media_mixed_error,
         media_path,
         file_name,
         caption,
@@ -2125,6 +2152,10 @@ const saveIncomingWhatsappMessage = async (
         media_word_candidate,
         media_word_processed_at,
         media_word_error,
+        media_mixed_status,
+        media_mixed_context,
+        media_mixed_processed_at,
+        media_mixed_error,
         media_path,
         file_name,
         caption,
@@ -2231,6 +2262,10 @@ const saveIncomingWhatsappMessage = async (
         media_word_candidate,
         media_word_processed_at,
         media_word_error,
+        media_mixed_status,
+        media_mixed_context,
+        media_mixed_processed_at,
+        media_mixed_error,
         media_path,
         file_name,
         caption,
@@ -2374,6 +2409,10 @@ const updateIncomingWhatsappMessageProcessing = async (
         media_word_candidate,
         media_word_processed_at,
         media_word_error,
+        media_mixed_status,
+        media_mixed_context,
+        media_mixed_processed_at,
+        media_mixed_error,
         media_path,
         file_name,
         caption,
@@ -2852,6 +2891,45 @@ const captureSavedWhatsappMediaMessage = async (
   }
 }
 
+const processWhatsappMixedContext = async (dependencies, { messageId } = {}) => {
+  const startedAt = Date.now()
+  logWhatsappWebhook('whatsapp_mixed_context_started', { messageId })
+
+  try {
+    const result = await processWhatsAppMixedMessageContext({
+      messageId,
+      pool: dependencies.pool,
+      tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+    })
+    const details = {
+      ...getSafeMixedMessageLogDetails(result),
+      durationMs: Date.now() - startedAt,
+      senderPhone: result.context?.sender ?? '',
+    }
+    const event = result.duplicate
+      ? 'whatsapp_mixed_context_duplicate_skipped'
+      : result.status === MIXED_MESSAGE_STATUSES.MIXED_GROUPED
+        ? 'whatsapp_mixed_context_grouped'
+        : result.status === MIXED_MESSAGE_STATUSES.MIXED_AMBIGUOUS
+          ? 'whatsapp_mixed_context_ambiguous'
+          : result.status === MIXED_MESSAGE_STATUSES.MIXED_NO_CONTEXT
+            ? 'whatsapp_mixed_context_no_context'
+            : result.status === MIXED_MESSAGE_STATUSES.MIXED_FAILED
+              ? 'whatsapp_mixed_context_failed'
+              : 'whatsapp_mixed_context_skipped'
+    logWhatsappWebhook(event, details)
+    return result
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : String(error)
+    logWhatsappWebhook('whatsapp_mixed_context_failed', {
+      durationMs: Date.now() - startedAt,
+      error: safeError,
+      messageId,
+    })
+    return { error: safeError, messageId, status: MIXED_MESSAGE_STATUSES.MIXED_FAILED }
+  }
+}
+
 const downloadCapturedWhatsappMediaMessage = async (
   dependencies,
   {
@@ -2945,6 +3023,10 @@ const processDownloadedWhatsappExcelMessage = async (
     logWhatsappWebhook('whatsapp_excel_processing_failed', safeDetails)
   }
 
+  if ([MEDIA_EXCEL_STATUSES.EXCEL_PARSED, MEDIA_EXCEL_STATUSES.EXCEL_PARTIAL].includes(processingResult.status)) {
+    await processWhatsappMixedContext(dependencies, { messageId })
+  }
+
   return processingResult
 }
 
@@ -2978,6 +3060,10 @@ const processDownloadedWhatsappWordMessage = async (
     logWhatsappWebhook('whatsapp_word_processing_unsupported', safeDetails)
   } else {
     logWhatsappWebhook('whatsapp_word_processing_failed', safeDetails)
+  }
+
+  if ([MEDIA_WORD_STATUSES.WORD_PARSED, MEDIA_WORD_STATUSES.WORD_PARTIAL].includes(processingResult.status)) {
+    await processWhatsappMixedContext(dependencies, { messageId })
   }
 
   return processingResult
@@ -3048,6 +3134,10 @@ const parseExtractedWhatsappMediaOrderCandidate = async (
     logWhatsappWebhook('whatsapp_media_order_parse_no_lines', safeDetails)
   } else {
     logWhatsappWebhook('whatsapp_media_order_parse_failed', safeDetails)
+  }
+
+  if ([MEDIA_ORDER_PARSE_STATUSES.PARSED, MEDIA_ORDER_PARSE_STATUSES.PARSE_PARTIAL].includes(parseResult.status)) {
+    await processWhatsappMixedContext(dependencies, { messageId })
   }
 
   return parseResult
@@ -4376,6 +4466,30 @@ export const createWhatsappPIRouter = (dependencies) => {
               parseStatus: commandResult.parseStatus,
               saved: true,
               warnings: commandResult.warnings,
+            }),
+          )
+          continue
+        }
+
+        const mixedContextResult = await processWhatsappMixedContext(dependencies, {
+          messageId: messageSource.messageId,
+        })
+
+        if ([
+          MIXED_MESSAGE_STATUSES.MIXED_GROUPED,
+          MIXED_MESSAGE_STATUSES.MIXED_PARTIAL,
+          MIXED_MESSAGE_STATUSES.MIXED_AMBIGUOUS,
+          MIXED_MESSAGE_STATUSES.MIXED_FAILED,
+        ].includes(mixedContextResult.status)) {
+          results.push(
+            createWebhookResult({
+              errors: mixedContextResult.error ? [mixedContextResult.error] : [],
+              inserted: true,
+              messageId: messageSource.messageId,
+              parseStatus: mixedContextResult.status,
+              piCreated: false,
+              saved: true,
+              warnings: mixedContextResult.context?.warnings ?? [],
             }),
           )
           continue

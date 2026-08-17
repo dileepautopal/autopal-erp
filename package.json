@@ -31,6 +31,7 @@
     "test:whatsapp-media-order-candidate": "node --test backend/whatsappMediaOrderCandidateService.test.js",
     "test:whatsapp-excel-processing": "node --test backend/whatsappExcelProcessingService.test.js",
     "test:whatsapp-word-processing": "node --test backend/whatsappWordProcessingService.test.js",
+    "test:whatsapp-mixed-context": "node --test backend/whatsappMixedMessageContextService.test.js",
     "test:whatsapp-send": "node --test backend/whatsappSendService.test.js",
     "test:whatsapp-parser": "node --test backend/whatsappPi.test.js",
     "test:whatsapp-webhook": "node scripts/test-whatsapp-webhook.mjs",
