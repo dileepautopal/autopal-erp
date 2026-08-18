@@ -94,6 +94,12 @@ import {
   processWhatsAppValidatedOrderInput,
   VALIDATED_ORDER_STATUSES,
 } from './whatsappValidatedOrderInputService.js'
+import {
+  ensureWhatsAppOrderReviewAssessmentSchema,
+  getSafeOrderReviewLogDetails,
+  ORDER_REVIEW_STATUSES,
+  processWhatsAppOrderReviewAssessment,
+} from './whatsappOrderReviewAssessmentService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1414,6 +1420,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS validated_order_input jsonb,
           ADD COLUMN IF NOT EXISTS validated_order_processed_at timestamptz,
           ADD COLUMN IF NOT EXISTS validated_order_error text,
+          ADD COLUMN IF NOT EXISTS review_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS review_decision jsonb,
+          ADD COLUMN IF NOT EXISTS review_processed_at timestamptz,
+          ADD COLUMN IF NOT EXISTS review_error text,
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1499,6 +1509,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       await ensureWhatsAppMixedMessageContextSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppUnifiedOrderInputSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppValidatedOrderInputSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppOrderReviewAssessmentSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -2980,6 +2991,36 @@ const processWhatsappMixedContext = async (dependencies, { messageId } = {}) => 
   }
 }
 
+const processWhatsappOrderReviewAssessment = async (dependencies, { messageId } = {}) => {
+  logWhatsappWebhook('whatsapp_review_assessment_started', { messageId })
+
+  try {
+    const result = await processWhatsAppOrderReviewAssessment({
+      messageId,
+      pool: dependencies.pool,
+      tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+    })
+    const details = getSafeOrderReviewLogDetails(result)
+    const event = result.duplicate
+      ? 'whatsapp_review_skipped_existing'
+      : result.status === ORDER_REVIEW_STATUSES.AUTO_READY
+        ? 'whatsapp_review_auto_ready'
+        : result.status === ORDER_REVIEW_STATUSES.MANUAL_REVIEW
+          ? 'whatsapp_review_manual_review'
+          : result.status === ORDER_REVIEW_STATUSES.BLOCKED
+            ? 'whatsapp_review_blocked'
+            : result.status === ORDER_REVIEW_STATUSES.NO_INPUT
+              ? 'whatsapp_review_no_input'
+              : 'whatsapp_review_failed'
+    logWhatsappWebhook(event, details)
+    return result
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : String(error)
+    logWhatsappWebhook('whatsapp_review_failed', { error: safeError, messageId })
+    return { error: safeError, messageId, status: ORDER_REVIEW_STATUSES.ASSESSMENT_FAILED }
+  }
+}
+
 const processWhatsappUnifiedOrder = async (dependencies, { messageId } = {}) => {
   const startedAt = Date.now()
   logWhatsappWebhook('whatsapp_unified_order_started', { messageId })
@@ -3052,6 +3093,16 @@ const processWhatsappValidatedOrder = async (dependencies, { messageId } = {}) =
                 ? 'whatsapp_order_validation_rejected'
                 : 'whatsapp_order_validation_failed'
     logWhatsappWebhook(event, details)
+    if ([
+      VALIDATED_ORDER_STATUSES.VALIDATED_READY,
+      VALIDATED_ORDER_STATUSES.VALIDATED_PARTIAL,
+      VALIDATED_ORDER_STATUSES.VALIDATION_BLOCKED_AMBIGUOUS,
+      VALIDATED_ORDER_STATUSES.VALIDATION_NO_INPUT,
+      VALIDATED_ORDER_STATUSES.VALIDATION_REJECTED,
+      VALIDATED_ORDER_STATUSES.VALIDATION_FAILED,
+    ].includes(result.status)) {
+      await processWhatsappOrderReviewAssessment(dependencies, { messageId })
+    }
     return result
   } catch (error) {
     const safeError = error instanceof Error ? error.message : String(error)
