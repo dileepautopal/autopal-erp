@@ -88,6 +88,12 @@ import {
   processWhatsAppUnifiedOrderInput,
   UNIFIED_ORDER_STATUSES,
 } from './whatsappUnifiedOrderInputService.js'
+import {
+  ensureWhatsAppValidatedOrderInputSchema,
+  getSafeValidatedOrderLogDetails,
+  processWhatsAppValidatedOrderInput,
+  VALIDATED_ORDER_STATUSES,
+} from './whatsappValidatedOrderInputService.js'
 
 const DEFAULT_TERMS =
   'PI created automatically from WhatsApp message. Please verify before final use.'
@@ -1404,6 +1410,10 @@ const ensureWhatsappMessageSchema = async (pool) => {
           ADD COLUMN IF NOT EXISTS unified_order_input jsonb,
           ADD COLUMN IF NOT EXISTS unified_order_processed_at timestamptz,
           ADD COLUMN IF NOT EXISTS unified_order_error text,
+          ADD COLUMN IF NOT EXISTS validated_order_status varchar(50) NOT NULL DEFAULT 'PENDING',
+          ADD COLUMN IF NOT EXISTS validated_order_input jsonb,
+          ADD COLUMN IF NOT EXISTS validated_order_processed_at timestamptz,
+          ADD COLUMN IF NOT EXISTS validated_order_error text,
           ADD COLUMN IF NOT EXISTS media_path text,
           ADD COLUMN IF NOT EXISTS file_name text,
           ADD COLUMN IF NOT EXISTS caption text,
@@ -1488,6 +1498,7 @@ const ensureWhatsappMessageSchema = async (pool) => {
       await ensureWhatsAppWordProcessingSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppMixedMessageContextSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppUnifiedOrderInputSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
+      await ensureWhatsAppValidatedOrderInputSchema(pool, { tableName: WHATSAPP_MESSAGE_TABLE_NAME })
       await ensureWhatsAppAcknowledgementSchema(pool)
       await ensurePiSummarySchema(pool)
       await ensureWhatsAppSendLogSchema(pool)
@@ -2996,6 +3007,15 @@ const processWhatsappUnifiedOrder = async (dependencies, { messageId } = {}) => 
               ? 'whatsapp_unified_order_no_input'
               : 'whatsapp_unified_order_failed'
     logWhatsappWebhook(event, details)
+    if ([
+      UNIFIED_ORDER_STATUSES.UNIFIED_READY,
+      UNIFIED_ORDER_STATUSES.UNIFIED_PARTIAL,
+      UNIFIED_ORDER_STATUSES.UNIFIED_AMBIGUOUS,
+      UNIFIED_ORDER_STATUSES.UNIFIED_NO_INPUT,
+      UNIFIED_ORDER_STATUSES.UNIFIED_FAILED,
+    ].includes(result.status)) {
+      await processWhatsappValidatedOrder(dependencies, { messageId })
+    }
     return result
   } catch (error) {
     const safeError = error instanceof Error ? error.message : String(error)
@@ -3005,6 +3025,38 @@ const processWhatsappUnifiedOrder = async (dependencies, { messageId } = {}) => 
       messageId,
     })
     return { error: safeError, messageId, status: UNIFIED_ORDER_STATUSES.UNIFIED_FAILED }
+  }
+}
+
+const processWhatsappValidatedOrder = async (dependencies, { messageId } = {}) => {
+  logWhatsappWebhook('whatsapp_order_validation_started', { messageId })
+
+  try {
+    const result = await processWhatsAppValidatedOrderInput({
+      messageId,
+      pool: dependencies.pool,
+      tableName: WHATSAPP_MESSAGE_TABLE_NAME,
+    })
+    const details = getSafeValidatedOrderLogDetails(result)
+    const event = result.duplicate
+      ? 'whatsapp_order_validation_skipped_existing'
+      : result.status === VALIDATED_ORDER_STATUSES.VALIDATED_READY
+        ? 'whatsapp_order_validation_ready'
+        : result.status === VALIDATED_ORDER_STATUSES.VALIDATED_PARTIAL
+          ? 'whatsapp_order_validation_partial'
+          : result.status === VALIDATED_ORDER_STATUSES.VALIDATION_BLOCKED_AMBIGUOUS
+            ? 'whatsapp_order_validation_ambiguous'
+            : result.status === VALIDATED_ORDER_STATUSES.VALIDATION_NO_INPUT
+              ? 'whatsapp_order_validation_no_input'
+              : result.status === VALIDATED_ORDER_STATUSES.VALIDATION_REJECTED
+                ? 'whatsapp_order_validation_rejected'
+                : 'whatsapp_order_validation_failed'
+    logWhatsappWebhook(event, details)
+    return result
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : String(error)
+    logWhatsappWebhook('whatsapp_order_validation_failed', { error: safeError, messageId })
+    return { error: safeError, messageId, status: VALIDATED_ORDER_STATUSES.VALIDATION_FAILED }
   }
 }
 
